@@ -18,6 +18,7 @@ import GhostIsolation as Ghost
 warnings.filterwarnings('ignore')
 
 if __name__ == '__main__':  # This is a very important precaution for Windows
+    __spec__ = None  # Important for ipynb compatibility
 
     if len(sys.argv) > 1:
         # if user wants to run Alex's script from command line they'll have

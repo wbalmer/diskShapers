@@ -1,4 +1,4 @@
 # ignore large files, unnecessary folders
-*.fits*
-*__pycache__*
-*.ipynb_checkpoints*
+*.fits
+__pycache__
+.ipynb_checkpoints

@@ -1,34 +1,46 @@
 # Create a gaussian and save as a fits file
 # Used if ghost model doesn't match point source
-# William Balmer 9/18/2020
+# Initialized William Balmer 9/18/2020
 # gaussian function inspired by gist #4635563 by user andrewgiessel
 
-# this script takes sys inputs in the following order:
-# "shape" as one integer, "fwhm" as one float
+# Converted from script to class by William Balmer 9/22/2020
 
 # imports
-import sys
 import numpy as np
 from astropy.io import fits
 
 
-# function
-def Gaussian(shape, FWHM=5):
-    """
-    Generate a 2D gaussian within a square array
-    """
+class Gaussian():
+    '''
+    A class to call when you need a gaussian generated
+    '''
 
-    x = np.arange(0, shape, 1, float)
-    y = x[:, np.newaxis]
+    def __init__(self, shape, FWHM, save='n'):
+        '''
+        initialize the class
+        '''
+        self.gaussian = 1
 
-    x0 = y0 = shape // 2
+        # run script
+        self.shape = shape
+        self.FWHM = FWHM
+        self.g = self.Gaussian()
+        if save == 'y':
+            self.saveGaussian()
+        return self.g
 
-    return np.exp(-4*np.log(2) * ((x-x0)**2 + (y-y0)**2) / FWHM**2)
+    def Gaussian(self):
+        """
+        Generate a 2D gaussian within a square array
+        """
 
+        x = np.arange(0, self.shape, 1, float)
+        y = x[:, np.newaxis]
 
-# run script
-shape = int(sys.argv[1])
-FWHM = float(sys.argv[2])
+        x0 = y0 = self.shape // 2
 
-g = Gaussian(shape, FWHM=FWHM)
-fits.writeto('gausFWHM'+str(FWHM)+'.fits', g, overwrite=True)
+        return np.exp(-4*np.log(2) * ((x-x0)**2 + (y-y0)**2) / self.FWHM**2)
+
+    def saveGaussian(self):
+        fits.writeto('gausFWHM'+str(self.FWHM)+'.fits', self.g, overwrite=True)
+        return

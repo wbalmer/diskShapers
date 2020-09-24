@@ -45,7 +45,7 @@ class forwardModel():
                 PSFpath = 'doGaussian'
             else:
                 Ghost.ghostIsolation(cubepath, 380, 220, 10, 10, 10)
-            PSFpath = 'ghost.fits'
+                PSFpath = 'ghost.fits'
 
         # set paths to sliced dataset, call dataset into KLIP format
         # set up variables needed for KLIP calls
@@ -60,8 +60,6 @@ class forwardModel():
 
         self.PSFpath = PSFpath
 
-        self.psf2 = self.construct_inst_PSF()
-
         # setup FM guesses
         self.numbasis = np.array([KLmode])  # KL basis cutoffs you want
         self.guesssep = sep  # estimate of separation in pixels
@@ -72,17 +70,6 @@ class forwardModel():
             self.dn_per_contrast[i] = scale  # factor to scale PSF to star
         self.guessspec = np.array([1])  # our data is 1D in wavelength
 
-        # initialize the FM Planet PSF class
-
-        self.fm_class = fmpsf.FMPlanetPSF(self.dataset.input.shape,
-                                          self.numbasis, self.guesssep,
-                                          self.guesspa, self.guessflux,
-                                          self.psf2,
-                                          np.unique(self.dataset.wvs),
-                                          self.dn_per_contrast,
-                                          star_spt='A6',
-                                          spectrallib=[self.guessspec])
-
         # PSF subtraction parameters
         self.outputdir = output  # where to write the output files
         self.prefix = prefix  # fileprefix for the output files
@@ -91,11 +78,35 @@ class forwardModel():
         self.padding = 0  # we are not padding our zones
         self.movement = move
 
-        print('Parameters set, beginning forward modeling... ')
-        self.run_KLIP()
-        return
+        print('Parameters set, ready to begin forward modeling... ')
+
+    def prep_KLIP(self):
+        '''
+        Sets up instrumental psf by running the construct_inst_PSF method,
+        and then initializing the pyklip fm_class object which is required
+        to forward model through KLIP (via the run_KLIP method)
+        '''
+        self.construct_inst_PSF()  # sets self.psf2 == instrumental psf
+        if self.fwhm is None:
+            print('instrumental PSF FWHM is: '+str(self.head["0PCTFWHM"]))
+        else:
+            print('instrumental PSF FWHM is: '+str(self.fwhm))
+        # initialize the FM Planet PSF class
+        self.fm_class = fmpsf.FMPlanetPSF(self.dataset.input.shape,
+                                          self.numbasis, self.guesssep,
+                                          self.guesspa, self.guessflux,
+                                          self.psf2,
+                                          np.unique(self.dataset.wvs),
+                                          self.dn_per_contrast,
+                                          star_spt='A6',
+                                          spectrallib=[self.guessspec])
+        print('fm_class ready for KLIP')
 
     def run_KLIP(self):
+        '''
+        Runs klip on the dataset with the fm_class object given all input
+        parameters. Last step before MCMC
+        '''
         # run KLIP-FM
         fm.klip_dataset(self.dataset, self.fm_class, mode="ADI",
                         outputdir=self.outputdir, fileprefix=self.prefix,
@@ -115,10 +126,11 @@ class forwardModel():
                 fwhm = self.head["0PCTFWHM"]
             else:
                 fwhm = self.fwhm
-            psf = Gaussian(31, fwhm)
+            gauss = Gaussian(31, fwhm)
+            psf = gauss.g
         else:
             psf = fits.getdata(self.PSFpath)
         # shape instrumental psf how pyklipFM wants
         psf2 = np.zeros((1, psf.shape[0], psf.shape[1]))
         psf2[0] = psf
-        return(psf2)
+        self.psf2 = psf2

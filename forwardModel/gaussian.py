@@ -27,7 +27,6 @@ class Gaussian():
         self.g = self.Gaussian()
         if save == 'y':
             self.saveGaussian()
-        return self.g
 
     def Gaussian(self):
         """

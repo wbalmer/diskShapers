@@ -8,7 +8,9 @@ from astropy.io import fits
 import pyklip.fakes as fakes
 import matplotlib.pyplot as plt
 import pyklip.instruments.MagAO as MagAO
-
+from gaussian import Gaussian
+import warnings
+warnings.filterwarnings('ignore')
 
 class planetHole():
     '''
@@ -19,7 +21,7 @@ class planetHole():
 
     def __init__(self, filepath, prefix, outputdir, contrast, sep, theta,
                  fwhm=None, ghostpath='ghost.fits', highpass=False,
-                 klipparams=[6, 3, [1, 5, 50]]):
+                 klipparams=[6, 3, [1, 5, 50]], usegaussian=False):
         '''
         Initializes the class, injecting hole as specified and prepared for
         KLIP reduction via "run_KLIP" function
@@ -37,7 +39,8 @@ class planetHole():
         else:
             self.fwhm = fwhm
         self.ghostpath = ghostpath
-        self.psf = self.instrPSF(self, self.ghostpath)
+        self.usegaussian = usegaussian
+        self.psf = self.instrPSF(self.ghostpath)
 
         self.inpflux = np.zeros((self.dataset.input.shape[0],
                                  self.psf.shape[0], self.psf.shape[1]))
@@ -72,37 +75,43 @@ class planetHole():
 
         result = self.outputdir+'\\'+self.pfx+'-KLmodes-all.fits'
         print('KLIP result is saved to: '+result)
-        self.resultdata = fits.getdata(result)
-        return self.resultdata
+        resultdata = fits.getdata(result)
+        self.resultdata = resultdata
+        return
 
-    def instrPSF(ghostpath):
+    def instrPSF(self, ghostpath):
         '''
         Grabs instrumental psf for negative planet injection.
         Intended to be expanded to include default gaussian
         Initialized: William B. 9/22/2020
         '''
-        return fits.getdata(ghostpath)
+        if self.usegaussian is True:
+            gauss = Gaussian(31, self.fwhm)
+            psf = gauss.g
+        else:
+            psf = fits.getdata(ghostpath)
+        return psf
 
-    def showit(image, save='n', lims='n', cmap='magma', savename='showit.png'):
+    def showit(self, image, save='n', lims='n', cmap='magma', name='showit.png', vmin=None, vmax=None):
         '''
         Displays image data cleanly with attractive colorbar and limits
         Initialized: William B. 9/22/2020
         '''
         plt.figure(figsize=(7, 7))
-        plt.imshow(image, cmap=cmap, origin='lower')  # plots image
+        plt.imshow(image, cmap=cmap, vmin=vmin, vmax=vmax, origin='lower')  # plots image
         plt.colorbar()  # plots colorbar
         if lims != 'n':
             plt.xlim(lims[0][0], lims[0][1])
             plt.ylim(lims[1][0], lims[1][1])
         if save == 'y':
-            plt.savefig(savename, dpi=150)
+            plt.savefig(name, dpi=150)
         return
 
-    def showresult(self, KLmode=2, save='n', savename='negplanetinj.png'):
+    def showresult(self, KLmode=2, save='n', name='negplanetinj.png', vmin=None, vmax=None):
         '''
         Runs showit function on result of KLIP reduction
         Initialized: William B. 9/22/2020
         '''
-        self.showit(self.resultdata[KLmode], lims=[[200, 250], [200, 250]],
-                    save='n', savename=savename)
+        self.showit(self.resultdata[KLmode], lims=[[205, 225], [210, 230]],
+                    save='n', name=name, vmin=vmin, vmax=vmax)
         return

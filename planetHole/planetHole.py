@@ -1,5 +1,4 @@
 # imports
-import os
 import glob
 import pyklip
 import numpy as np
@@ -11,6 +10,7 @@ import pyklip.instruments.MagAO as MagAO
 from gaussian import Gaussian
 import warnings
 warnings.filterwarnings('ignore')
+
 
 class planetHole():
     '''
@@ -73,11 +73,19 @@ class planetHole():
                                          save_aligned=False,
                                          time_collapse='median')
 
-        result = self.outputdir+'\\'+self.pfx+'-KLmodes-all.fits'
-        print('KLIP result is saved to: '+result)
-        resultdata = fits.getdata(result)
-        self.resultdata = resultdata
+        self.resultdir = self.outputdir+'\\'+self.pfx+'-KLmodes-all.fits'
+        print('KLIP result is saved to: '+self.resultdir)
         return
+
+    def get_result(self, KLmodepos):
+        '''
+        Opens KLIP result fits file, takes image data for one KLmode,
+        closes fits file.
+        '''
+        #with fits.open(self.resultdir) as resulthdul:
+        #    self.resultdata = resulthdul
+        print('result dir is '+str(self.resultdir))
+        return self.resultdir
 
     def instrPSF(self, ghostpath):
         '''
@@ -92,13 +100,14 @@ class planetHole():
             psf = fits.getdata(ghostpath)
         return psf
 
-    def showit(self, image, save='n', lims='n', cmap='magma', name='showit.png', vmin=None, vmax=None):
+    def showit(self, image, save='n', lims='n', cmap='magma',
+               name='showit.png', vmin=None, vmax=None):
         '''
         Displays image data cleanly with attractive colorbar and limits
         Initialized: William B. 9/22/2020
         '''
-        plt.figure(figsize=(7, 7))
-        plt.imshow(image, cmap=cmap, vmin=vmin, vmax=vmax, origin='lower')  # plots image
+        plt.figure(figsize=(7, 7))  # plots image
+        plt.imshow(image, cmap=cmap, vmin=vmin, vmax=vmax, origin='lower')
         plt.colorbar()  # plots colorbar
         if lims != 'n':
             plt.xlim(lims[0][0], lims[0][1])
@@ -107,11 +116,12 @@ class planetHole():
             plt.savefig(name, dpi=150)
         return
 
-    def showresult(self, KLmode=2, save='n', name='negplanetinj.png', vmin=None, vmax=None):
+    def show_result(self, save='n', name='negplanetinj.png',
+                    vmin=None, vmax=None):
         '''
         Runs showit function on result of KLIP reduction
         Initialized: William B. 9/22/2020
         '''
-        self.showit(self.resultdata[KLmode], lims=[[205, 225], [210, 230]],
+        self.showit(self.resultdata, lims=[[205, 225], [210, 230]],
                     save='n', name=name, vmin=vmin, vmax=vmax)
         return

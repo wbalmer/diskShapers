@@ -1,6 +1,10 @@
 # ignore large files, unnecessary folders
 *.fits
+*.fit
+*fit.gz
+*.tar
 __pycache__
 .ipynb_checkpoints
 *.png
 *.pkl
+LMIRCam_Data_reduction

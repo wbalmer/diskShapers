@@ -447,7 +447,7 @@ def crosscube(imcube, cenx, ceny, box=50, returnmed='y', returncube='n'):
         return median_image, cube
 
 
-def nodSubtraction(imlist, ret='y', cube='n', med='n', path='nodsubcube.fits'):
+def nodSubtraction(imlist, path='nodsubcube.fits'):
     '''
 
     '''
@@ -504,17 +504,31 @@ def nodSubtraction(imlist, ret='y', cube='n', med='n', path='nodsubcube.fits'):
             nodsubs[i] = bg_sub_imdata
             k += 1
 
+    # write the cube of unshifted nod subtracted images to disk
+    fits.writeto(path, nodsubs, header=im1head, overwrite=True)
+
+    return print('Cube of nod subtracted data writen to '+path)
+
+
+def shiftNoddedData(cubepath, ret='y', cube='n', med='n'):
+    '''
+
+    '''
+    nodsubcube = fits.getdata(cubepath)
+    head = fits.getdata(cubepath)
     # run cross correlation shift, get cube and median image
-    shiftnodsubmed, shiftnodsubcube = crosscube(nodsubs, cenx=250,
+    shiftnodsubmed, shiftnodsubcube = crosscube(nodsubcube, cenx=250,
                                                 ceny=250, box=250,
                                                 returnmed='y',
                                                 returncube='y')
 
     if cube == 'y':
-        fits.writeto(path, shiftnodsubcube, header=im1head, overwrite=True)
+        fits.writeto(cubepath.replace('.fits', '_shiftcube.fits'),
+                     shiftnodsubcube, header=head, overwrite=True)
 
     if med == 'y':
-        fits.writeto(path, shiftnodsubcube, header=im1head, overwrite=True)
+        fits.writeto(cubepath.replace('.fits', '_shiftmed.fits'),
+                     shiftnodsubcube, header=head, overwrite=True)
 
     if ret == 'y':
         return shiftnodsubmed, shiftnodsubcube
@@ -594,7 +608,6 @@ def runtheReduction(datadir, badpixelpath, intTime=300):
     med_dark = createMasterDark(darks, intTime)
     # loop through datasets and correct them
     for dataset in datasets:
-        # need to add coadd business
         runSubtraction(dataset, med_dark, intTime, badpixelmap)
     # get new subtracted data
     reduced_data, darks2 = sortCliodata(datadir, filesufx='*_LDBP*.fit*')
@@ -609,7 +622,7 @@ def runtheReduction(datadir, badpixelpath, intTime=300):
         band, name, datetime = head['PASSBAND'], head['CID'], head['DATE']
         date = datetime.split('T')[0]
         name = name.split(' * ')[-1]
-        filename = name+'_'+band+'_'+date+'.fits'
-        nodSubtraction(dataset, ret='n', med='y', path=savepath+filename)
+        filename = name+'_'+band+'_'+date+'_nodsub.fits'
+        nodSubtraction(dataset, path=savepath+filename)
 
     return print('Done reducing the files')

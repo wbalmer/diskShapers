@@ -3,12 +3,33 @@ import os
 import glob
 import numpy as np
 import scipy.signal
+from scipy.signal import peak_widths
 from scipy import ndimage
 from scipy.ndimage.interpolation import shift
 from astropy.io import fits
+import warnings
+from photutils import DAOStarFinder, CircularAperture
+from astropy.visualization import LogStretch
+from astropy.visualization.mpl_normalize import ImageNormalize
+import matplotlib.pyplot as plt
+from astropy.nddata import NDData
+from photutils.psf import extract_stars
+from astropy.table import Table
+from photutils import EPSFBuilder
+
+from photutils.psf import IterativelySubtractedPSFPhotometry
+from photutils import MMMBackground
+from photutils.psf import IntegratedGaussianPRF, DAOGroup
+from astropy.modeling.fitting import LevMarLSQFitter
+
+import astropy.units as u
 
 
 # functions
+def calcDistance(x0, y0, x1, y1):
+    return np.sqrt((x1 - x0)**2 + (y1-y0)**2)
+
+
 def linearizeClio2(rawimage):
     '''
     linearizeClio2
@@ -431,8 +452,8 @@ def crosscube(imcube, cenx, ceny, box=50, returnmed='y', returncube='n'):
 
     # Calculate trim edges of new median stacked images so all stacked images
     # of each target have same size
-    max_x_shift = int(np.max(np.abs([xshifts[x] for x in xshifts.keys()])))
-    max_y_shift = int(np.max(np.abs([yshifts[x] for x in yshifts.keys()])))
+    max_x_shift = np.max(np.abs([xshifts[x] for x in xshifts.keys()]))
+    max_y_shift = np.max(np.abs([yshifts[x] for x in yshifts.keys()]))
 
     print('Max x-shift={0}, max y-shift={1} (pixels)'.format(max_x_shift,
                                                              max_y_shift))
@@ -536,6 +557,9 @@ def shiftNoddedData(cubepath, ret='y', cube='n', med='n'):
 
 def filelister(filelist, day, band, targ, datedict, wavedict, objdict):
     '''
+    Cross checks dictionaries of day, band, and target names and compiles
+    a list of the images in a filelist that match the day, band, and targ
+    specified.
     '''
     thelist = []
     for file in filelist:
@@ -546,12 +570,15 @@ def filelister(filelist, day, band, targ, datedict, wavedict, objdict):
     return thelist
 
 
-def sortCliodata(datadir, filesufx='*.fit*'):
+def sortData(datadir, instrument='CLIO2', filesufx='*.fit*'):
     '''
     Sorts through a data directory filled with Clio data, sorts it by epoch,
     target, and passband and returns lists of sorted data, as well as a list of
     the darks in all the folders as a separate list.
     '''
+    # ignore warnings raised about NIRC2 header contents
+    warnings.filterwarnings("ignore")
+
     names = []
     bands = []
     days = []
@@ -563,45 +590,65 @@ def sortCliodata(datadir, filesufx='*.fit*'):
     objdict = {}
     datedict = {}
 
-    images = glob.glob(datadir+'clio_astro/*/'+filesufx)
+    images = glob.glob(datadir+'\\*\\'+filesufx)
+
+    if images is []:
+        raise FileNotFoundError("Empty data directory!")
+
     for im in images:
         hdr = fits.getheader(im)
-        name = hdr['CID']
-        passband = hdr['PASSBAND']
-        date = hdr['DATE']
-        day = date.split('T')[0]
-        unique = day+'&'+passband+'&'+name
-        if passband == 'Blocked':  # if passband is 'blocked' then it is a dark
-            darks.append(im)
-        elif hdr['LOOP'] == 1:  # ensure AO is on for images used
-            ao_on_images.append(im)
-            if name not in names:
-                names.append(name)
-            if passband not in bands:
-                bands.append(passband)
-            if day not in days:
-                days.append(day)
-            if unique not in uniques:
-                uniques.append(unique)
-            wavedict.update({im: passband})
-            objdict.update({im: name})
-            datedict.update({im: day})
+        if instrument == 'CLIO2':
+            name = hdr['CID']
+            passband = hdr['PASSBAND']
+            date = hdr['DATE']
+            day = date.split('T')[0]
+            unique = day+'&'+passband+'&'+name
+            if passband == 'Blocked':  # if passband is 'blocked' then it is a dark
+                darks.append(im)
+            elif hdr['LOOP'] == 1:  # ensure AO is on for images used
+                ao_on_images.append(im)
 
-    clio_datasets = []
+        elif instrument == 'NIRC2':
+            name = hdr['TARGNAME']
+            passband = hdr['FILTER']
+            date = hdr['DATE-OBS']
+            day = date.split('T')[0]
+            unique = day+'&'+passband+'&'+name
+            # currently using all NIRC2 images, so no need to filter for AO
+            ao_on_images.append(im)
+        else:
+            raise ValueError('the currently supported instruments are NIRC2 and CLIO2')
+
+        if name not in names:
+            names.append(name)
+        if passband not in bands:
+            bands.append(passband)
+        if day not in days:
+            days.append(day)
+        if unique not in uniques:
+            uniques.append(unique)
+        wavedict.update({im: passband})
+        objdict.update({im: name})
+        datedict.update({im: day})
+
+    datasets = []
     for unique in uniques:
         day, band, name = unique.split('&')
         liste = filelister(ao_on_images, day, band, name, datedict=datedict,
                            wavedict=wavedict, objdict=objdict)
-        clio_datasets.append(liste)
+        datasets.append(liste)
 
-    return clio_datasets, darks
+    if instrument == 'NIRC2':
+        return datasets
+    else:
+        return datasets, darks
 
 
 def runtheReduction(datadir, badpixelpath, intTime=300):
     '''
     '''
     # get data
-    datasets, darks = sortCliodata(datadir)
+    datasets, darks = sortData(datadir)
     # get bad pixel map
     badpixelmap = fits.getdata(badpixelpath)
     # create master dark
@@ -610,7 +657,7 @@ def runtheReduction(datadir, badpixelpath, intTime=300):
     for dataset in datasets:
         runSubtraction(dataset, med_dark, intTime, badpixelmap)
     # get new subtracted data
-    reduced_data, darks2 = sortCliodata(datadir, filesufx='*_LDBP*.fit*')
+    reduced_data, darks2 = sortData(datadir, filesufx='*_LDBP*.fit*')
     # run nodSubtraction
     for dataset in reduced_data:
         savepath = datadir+'/reduced/'
@@ -626,3 +673,234 @@ def runtheReduction(datadir, badpixelpath, intTime=300):
         nodSubtraction(dataset, path=savepath+filename)
 
     return print('Done reducing the files')
+
+
+def starLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
+               plot=True, roundness=0.5, crit_sep=15):
+    '''
+    starLocate
+    ---------
+    User selects reference psf source, then target source from image
+    which is called via fits.getdata from imagepath. Returns the iterative
+    photometry result ran on the target, which yields accurate position
+
+    Example Usage: targx, targy, fwhm = findFirst('path/to/img.fits')
+
+    Modification History:
+    Initialized by William Balmer 10/30/2020
+
+    inputs
+    ------------
+    imagepath           : (string) path to fits image
+    thresh              : (float) threshold parameter for DAOStarFinder
+    fwhmguess           : (float) fwhm parameter for DAOStarFinder
+    bright              : (int) number of found stars to display
+    stampsize           : (optional, default=None) size of subregion of image to analyse
+    plot                : (optional, default=True) plot results or not
+    roundness           : (optional, default=0.5) roundlo, roundhi parameter for DAOStarFinder
+    crit_sep            : (optional, default=15)
+
+    outputs
+    ------------
+    phot_results        : (astropy.table object)
+    '''
+    print('first, find a reference star to create a reference PSF')
+    targx, targy, fwhm = findFirst(imagepath, thresh=thresh,
+                                   fwhmguess=fwhmguess, bright=bright)
+    if stampsize is None:
+        stampsize = int(input('input the size of stamp: '))
+    elif stampsize is not int:
+        stampsize = int(stampsize)
+
+    # read in img header to get pixel scale
+    head = fits.getheader(imagepath)
+    pixel_scale = float(head['PIXSCALE'])
+    date = head['DATE-OBS']
+
+    data = fits.getdata(imagepath)
+    x0 = int(targx-(stampsize/2))
+    x1 = int(targx+(stampsize/2))
+    y0 = int(targy-(stampsize/2))
+    y1 = int(targy+(stampsize/2))
+    ref_stamp = data[y0:y1, x0:x1]
+
+    epsf = makeEPSF(ref_stamp, plot=plot)
+
+    print('next, select your target system to fit positions to')
+    targx, targy, fwhm = findFirst(imagepath, thresh=thresh,
+                                   fwhmguess=fwhmguess, bright=bright)
+
+    x0 = int(targx-(stampsize/2))
+    x1 = int(targx+(stampsize/2))
+    y0 = int(targy-(stampsize/2))
+    y1 = int(targy+(stampsize/2))
+    stamp = data[y0:y1, x0:x1]
+
+    daogroup = DAOGroup(crit_separation=crit_sep)
+    mmm_bkg = MMMBackground()
+    finder = DAOStarFinder(thresh, fwhm, roundlo=-roundness, roundhi=roundness,
+                           sigma_radius=3)
+    fitter = LevMarLSQFitter()
+    phot_obj = IterativelySubtractedPSFPhotometry(finder=finder,
+                                                  group_maker=daogroup,
+                                                  bkg_estimator=mmm_bkg,
+                                                  psf_model=epsf,
+                                                  fitter=fitter,
+                                                  fitshape=int(stampsize/2),
+                                                  niters=1,
+                                                  aperture_radius=7)
+
+    phot_results = phot_obj(stamp)
+    norm = ImageNormalize(stretch=LogStretch())
+    pos = phot_results['x_fit', 'y_fit']
+    positions = np.transpose((pos['x_fit'], pos['y_fit']))
+    apertures = CircularAperture(positions, r=fwhm)
+
+    if plot is True:
+        plt.figure(figsize=(9, 9))
+        plt.subplot(1, 2, 1)
+        plt.imshow(stamp, origin='lower', norm=norm)
+        apertures.plot(color='red', lw=1.5, alpha=0.7)
+        plt.colorbar(orientation='horizontal')
+
+        plt.subplot(1, 2, 2)
+        plt.imshow(phot_obj.get_residual_image(), cmap='viridis',
+                   origin='lower', interpolation='nearest', aspect=1)
+        apertures.plot(color='red', lw=1.5, alpha=0.7)
+        plt.colorbar(orientation='horizontal')
+
+    phot_results['pixscale'] = pixel_scale
+    phot_results['date'] = date
+
+    return phot_results
+
+
+def findFirst(imagepath, thresh=100, fwhmguess=5, bright=5):
+    '''
+    findFirst
+    ---------
+    Allows user to select target star in a fits image with a coarse
+    DAOStarFinder search, and returns the centroid and FWHM of that target
+
+    Example Usage: targx, targy, fwhm = findFirst('path/to/img.fits')
+
+    Modification History:
+    Initialized by William Balmer 10/30/2020
+
+    inputs
+    ------------
+    imagepath           : (string) path to fits image
+    thresh              : (optional, float) threshold parameter for DAOStarFinder
+    fwhmguess           : (optional, float) fwhm parameter for DAOStarFinder
+    bright              : (optional, int) number of found stars to display
+
+    outputs
+    ------------
+    targx               : (int) x centroid of selected target star
+    targy               : (int) y centroid ''
+    fwhm                : (float) fwhm of target star
+    '''
+    # plot results of quick starfinder to grab rough pos of target
+    firstim = fits.getdata(imagepath)
+    firstSF = DAOStarFinder(thresh, fwhmguess, brightest=bright)
+    table1 = firstSF.find_stars(firstim)
+
+    norm = ImageNormalize(stretch=LogStretch())
+    positions1 = np.transpose((table1['xcentroid'], table1['ycentroid']))
+    apertures1 = CircularAperture(positions1, r=5)
+    plt.figure()
+    plt.imshow(firstim, origin='lower', norm=norm)
+    apertures1.plot()
+    plt.show()
+    print(table1['xcentroid', 'ycentroid', 'roundness1'])
+
+    # select index of target central star from table printed above
+    targind = int(input('input the 0 indexed integer of your target from the table above: '))
+    targx = int(table1['xcentroid'][targind])
+    targy = int(table1['ycentroid'][targind])
+
+    # get fwhm of targ from first img
+    hist = firstim[targy]
+    fwhm, count_at_fwhm, left, right = peak_widths(hist, [np.argmax(hist)])
+    fwhm = fwhm[0]
+
+    print('target star is at ', str(targx), ',', str(targy), ' at FWHM', fwhm)
+    return targx, targy, fwhm
+
+
+def makeEPSF(image, mit=10, verb=True, plot=True):
+    '''
+    makeEPSF
+    ---------
+    Creates EPSF object from source in image
+
+    Example Usage: epsf = makeEPSF(reference)
+
+    Modification History:
+    Initialized by William Balmer 10/30/2020
+
+    inputs
+    ------------
+    image       : (string) np.array image, centered on reference star psf
+    mit         : (int) max iteration parameter for EPSFBuilder
+    verbo       : (Bool) progress_bar parameter for EPSFBuilder
+    plot        : (Bool) plot EPSF to check
+
+    outputs
+    ------------
+    epsf        : (object) photutils.psf.EPSFModel object
+
+    todo
+    ------------
+    - add ability to deal with rectangular image arrays, i.e. len(x)!=len(y)
+    - assess necessity for oversampling parameter (not useful for Keck, can only be 1)
+    '''
+    # norm to 1
+    image = image/np.nanmax(image)
+    size = image.shape[0]
+    # do photutils ePSF
+    nddata = NDData(data=image)
+
+    stars_tbl = Table()
+    stars_tbl['x'] = [int(size/2)]
+    stars_tbl['y'] = [int(size/2)]
+    stars = extract_stars(nddata, stars_tbl, size=(size-10))
+
+    epsf_builder = EPSFBuilder(oversampling=1, maxiters=mit, progress_bar=verb)
+    epsf, fitted_stars = epsf_builder(stars)
+
+    if plot is True:
+        # Plot epsf to check
+        norm = ImageNormalize(stretch=LogStretch())
+        plt.figure(figsize=(5,5))
+        plt.imshow(epsf.data, cmap='inferno', origin='lower', norm=norm,
+                   interpolation='nearest')
+        plt.colorbar()
+
+    return epsf
+
+
+def calcBinDist(phot_results):
+    '''
+    '''
+    pos = phot_results['x_fit', 'y_fit']
+    unc = phot_results['x_0_unc', 'y_0_unc']
+
+    pixel_scale = phot_results['pixscale'][0]
+
+    seps = []
+    errs = []
+    for i in range(len(pos)-1):
+        x, y = pos[i]
+        x1, y1 = pos[i+1]
+        s = calcDistance(x, y, x1, y1)*pixel_scale*u.arcsec
+        dx, dy = unc[i]
+        dx1, dy1 = unc[i+1]
+        ds = calcDistance(dx, dy, dx1, dy1)
+        ds = (ds*pixel_scale*u.arcsec).to(u.mas)
+
+        print(s.to(u.mas), '+/-', ds)
+        seps.append(s.value)
+        errs.append(ds.value)
+    result = np.asarray([seps,errs])
+    return result

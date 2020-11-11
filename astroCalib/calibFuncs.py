@@ -16,10 +16,10 @@ from astropy.nddata import NDData
 from photutils.psf import extract_stars
 from astropy.table import Table
 from photutils import EPSFBuilder
-
-from photutils.psf import IterativelySubtractedPSFPhotometry
+from astropy.modeling.functional_models import Moffat2D, AiryDisk2D
+from photutils.psf import IterativelySubtractedPSFPhotometry, FittableImageModel#
 from photutils import MMMBackground
-from photutils.psf import IntegratedGaussianPRF, DAOGroup
+from photutils.psf import IntegratedGaussianPRF, DAOGroup, prepare_psf_model
 from astropy.modeling.fitting import LevMarLSQFitter
 
 import astropy.units as u
@@ -570,7 +570,7 @@ def filelister(filelist, day, band, targ, datedict, wavedict, objdict):
     return thelist
 
 
-def sortData(datadir, instrument='CLIO2', filesufx='*.fit*'):
+def sortData(datadir, instrument='CLIO2', filesufx='*.fit*', returntab=False):
     '''
     Sorts through a data directory filled with Clio data, sorts it by epoch,
     target, and passband and returns lists of sorted data, as well as a list of
@@ -638,7 +638,9 @@ def sortData(datadir, instrument='CLIO2', filesufx='*.fit*'):
                            wavedict=wavedict, objdict=objdict)
         datasets.append(liste)
 
-    if instrument == 'NIRC2':
+    if returntab is True:
+        return uniques
+    elif instrument == 'NIRC2':
         return datasets
     else:
         return datasets, darks
@@ -676,7 +678,8 @@ def runtheReduction(datadir, badpixelpath, intTime=300):
 
 
 def starLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
-               plot=True, roundness=0.5, crit_sep=15):
+               epsfstamp=None, plot=True, roundness=0.5, crit_sep=15,
+               iterations=1, setfwhm=False):
     '''
     starLocate
     ---------
@@ -695,40 +698,34 @@ def starLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
     thresh              : (float) threshold parameter for DAOStarFinder
     fwhmguess           : (float) fwhm parameter for DAOStarFinder
     bright              : (int) number of found stars to display
-    stampsize           : (optional, default=None) size of subregion of image to analyse
-    plot                : (optional, default=True) plot results or not
-    roundness           : (optional, default=0.5) roundlo, roundhi parameter for DAOStarFinder
-    crit_sep            : (optional, default=15)
+    stampsize           : (optional, int, default=None) size of subregion of image to analyse
+    plot                : (optional, bool, default=True) plot results or not
+    roundness           : (optional, float, default=0.5) roundlo, roundhi parameter for DAOStarFinder
+    crit_sep            : (optional, float, default=15)
+    iterations          : (optional, int, default=1) iterations for IterativelySubtractedPSFPhotometry
+    setfwhm             : (optional, bool, default=False) use fwhmguess as fwhm
 
     outputs
     ------------
     phot_results        : (astropy.table object)
     '''
-    print('first, find a reference star to create a reference PSF')
-    targx, targy, fwhm = findFirst(imagepath, thresh=thresh,
-                                   fwhmguess=fwhmguess, bright=bright)
-    if stampsize is None:
-        stampsize = int(input('input the size of stamp: '))
-    elif stampsize is not int:
-        stampsize = int(stampsize)
-
+    # read in data
+    data = fits.getdata(imagepath)
     # read in img header to get pixel scale
     head = fits.getheader(imagepath)
     pixel_scale = float(head['PIXSCALE'])
     date = head['DATE-OBS']
 
-    data = fits.getdata(imagepath)
-    x0 = int(targx-(stampsize/2))
-    x1 = int(targx+(stampsize/2))
-    y0 = int(targy-(stampsize/2))
-    y1 = int(targy+(stampsize/2))
-    ref_stamp = data[y0:y1, x0:x1]
+    epsf = nircEPSF(imagepath, epsfsize=epsfstamp)
 
-    epsf = makeEPSF(ref_stamp, plot=plot)
-
-    print('next, select your target system to fit positions to')
+    print('Select your target system to fit positions to')
     targx, targy, fwhm = findFirst(imagepath, thresh=thresh,
                                    fwhmguess=fwhmguess, bright=bright)
+
+    if stampsize is None:
+        stampsize = int(input('input the size of stamp: '))
+    elif stampsize is not int:
+        stampsize = int(stampsize)
 
     x0 = int(targx-(stampsize/2))
     x1 = int(targx+(stampsize/2))
@@ -738,6 +735,8 @@ def starLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
 
     daogroup = DAOGroup(crit_separation=crit_sep)
     mmm_bkg = MMMBackground()
+    if setfwhm is True:
+        fwhm = fwhmguess
     finder = DAOStarFinder(thresh, fwhm, roundlo=-roundness, roundhi=roundness,
                            sigma_radius=3)
     fitter = LevMarLSQFitter()
@@ -747,7 +746,7 @@ def starLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
                                                   psf_model=epsf,
                                                   fitter=fitter,
                                                   fitshape=int(stampsize/2),
-                                                  niters=1,
+                                                  niters=iterations,
                                                   aperture_radius=7)
 
     phot_results = phot_obj(stamp)
@@ -764,7 +763,7 @@ def starLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
         plt.colorbar(orientation='horizontal')
 
         plt.subplot(1, 2, 2)
-        plt.imshow(phot_obj.get_residual_image(), cmap='viridis',
+        plt.imshow(phot_obj.get_residual_image(), cmap='viridis', norm=norm,
                    origin='lower', interpolation='nearest', aspect=1)
         apertures.plot(color='red', lw=1.5, alpha=0.7)
         plt.colorbar(orientation='horizontal')
@@ -828,7 +827,33 @@ def findFirst(imagepath, thresh=100, fwhmguess=5, bright=5):
     return targx, targy, fwhm
 
 
-def makeEPSF(image, mit=10, verb=True, plot=True):
+def nircEPSF(imgpath, epsfsize=None, thresh=100, fwhmguess=5, bright=5,
+             plot=True):
+    print('Choose a reference star image to create a reference PSF from')
+    targx, targy, fwhm = findFirst(imgpath, thresh=thresh,
+                                   fwhmguess=fwhmguess, bright=bright)
+
+    if epsfsize is None:
+        epsfsize = int(input('input the size of reference psf stamp: '))
+    elif epsfsize is not int:
+        epsfsize = int(epsfsize)
+
+    data = fits.getdata(imgpath)
+    x0 = int(targx-(epsfsize/2))
+    x1 = int(targx+(epsfsize/2))
+    y0 = int(targy-(epsfsize/2))
+    y1 = int(targy+(epsfsize/2))
+    ref_stamp = data[y0:y1, x0:x1]
+
+    epsf = makeEPSF(ref_stamp, plot=plot)
+    if epsf is None:
+        print('EPSF fitting failed, using gaussian PRF')
+        epsf = IntegratedGaussianPRF()
+
+    return epsf
+
+
+def makeEPSF(image, verb=True, plot=True):
     '''
     makeEPSF
     ---------
@@ -842,7 +867,6 @@ def makeEPSF(image, mit=10, verb=True, plot=True):
     inputs
     ------------
     image       : (string) np.array image, centered on reference star psf
-    mit         : (int) max iteration parameter for EPSFBuilder
     verbo       : (Bool) progress_bar parameter for EPSFBuilder
     plot        : (Bool) plot EPSF to check
 
@@ -857,25 +881,21 @@ def makeEPSF(image, mit=10, verb=True, plot=True):
     '''
     # norm to 1
     image = image/np.nanmax(image)
-    size = image.shape[0]
-    # do photutils ePSF
-    nddata = NDData(data=image)
-
-    stars_tbl = Table()
-    stars_tbl['x'] = [int(size/2)]
-    stars_tbl['y'] = [int(size/2)]
-    stars = extract_stars(nddata, stars_tbl, size=(size-10))
-
-    epsf_builder = EPSFBuilder(oversampling=1, maxiters=mit, progress_bar=verb)
-    epsf, fitted_stars = epsf_builder(stars)
+    # construct psf from image
+    epsf = FittableImageModel(image)
 
     if plot is True:
         # Plot epsf to check
         norm = ImageNormalize(stretch=LogStretch())
-        plt.figure(figsize=(5,5))
+        plt.figure(figsize=(5, 5))
         plt.imshow(epsf.data, cmap='inferno', origin='lower', norm=norm,
-                   interpolation='nearest')
+                   interpolation='nearest', vmin=0)
         plt.colorbar()
+        plt.show()
+
+    take = input('accept this epsf? (y/n): ')
+    if take == 'n':
+        epsf = None
 
     return epsf
 

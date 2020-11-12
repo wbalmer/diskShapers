@@ -1,6 +1,7 @@
 # imports
 import os
 import glob
+import datetime
 import numpy as np
 import scipy.signal
 from scipy.signal import peak_widths
@@ -8,7 +9,7 @@ from scipy import ndimage
 from scipy.ndimage.interpolation import shift
 from astropy.io import fits
 import warnings
-from photutils import DAOStarFinder, CircularAperture
+from photutils import CircularAperture, IRAFStarFinder
 from astropy.visualization import LogStretch
 from astropy.visualization.mpl_normalize import ImageNormalize
 import matplotlib.pyplot as plt
@@ -695,12 +696,12 @@ def starLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
     inputs
     ------------
     imagepath           : (string) path to fits image
-    thresh              : (float) threshold parameter for DAOStarFinder
-    fwhmguess           : (float) fwhm parameter for DAOStarFinder
+    thresh              : (float) threshold parameter for IRAFStarFinder
+    fwhmguess           : (float) fwhm parameter for IRAFStarFinder
     bright              : (int) number of found stars to display
     stampsize           : (optional, int, default=None) size of subregion of image to analyse
     plot                : (optional, bool, default=True) plot results or not
-    roundness           : (optional, float, default=0.5) roundlo, roundhi parameter for DAOStarFinder
+    roundness           : (optional, float, default=0.5) roundlo, roundhi parameter for IRAFStarFinder
     crit_sep            : (optional, float, default=15)
     iterations          : (optional, int, default=1) iterations for IterativelySubtractedPSFPhotometry
     setfwhm             : (optional, bool, default=False) use fwhmguess as fwhm
@@ -713,8 +714,13 @@ def starLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
     data = fits.getdata(imagepath)
     # read in img header to get pixel scale
     head = fits.getheader(imagepath)
-    pixel_scale = float(head['PIXSCALE'])
     date = head['DATE-OBS']
+    date_time_obj = datetime.datetime.strptime(date, '%Y-%m-%d')
+    pixturnover = datetime.datetime.strptime('2015-5-13', '%Y-%m-%d')
+    if date_time_obj.date() > pixturnover.date():
+        pixel_scale = 0.009971
+    else:
+        pixel_scale = float(head['PIXSCALE'])
 
     epsf = nircEPSF(imagepath, epsfsize=epsfstamp)
 
@@ -737,7 +743,7 @@ def starLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
     mmm_bkg = MMMBackground()
     if setfwhm is True:
         fwhm = fwhmguess
-    finder = DAOStarFinder(thresh, fwhm, roundlo=-roundness, roundhi=roundness,
+    finder = IRAFStarFinder(thresh, fwhm, roundlo=-roundness, roundhi=roundness,
                            sigma_radius=3)
     fitter = LevMarLSQFitter()
     phot_obj = IterativelySubtractedPSFPhotometry(finder=finder,
@@ -751,8 +757,8 @@ def starLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
 
     phot_results = phot_obj(stamp)
     norm = ImageNormalize(stretch=LogStretch())
-    pos = phot_results['x_fit', 'y_fit']
-    positions = np.transpose((pos['x_fit'], pos['y_fit']))
+    pos = phot_results['x_0', 'y_0']
+    positions = np.transpose((pos['x_0'], pos['y_0']))
     apertures = CircularAperture(positions, r=fwhm)
 
     if plot is True:
@@ -771,7 +777,9 @@ def starLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
     phot_results['pixscale'] = pixel_scale
     phot_results['date'] = date
 
-    return phot_results
+    result = calcBinDist(phot_results)
+
+    return result
 
 
 def findFirst(imagepath, thresh=100, fwhmguess=5, bright=5):
@@ -779,7 +787,7 @@ def findFirst(imagepath, thresh=100, fwhmguess=5, bright=5):
     findFirst
     ---------
     Allows user to select target star in a fits image with a coarse
-    DAOStarFinder search, and returns the centroid and FWHM of that target
+    IRAFStarFinder search, and returns the centroid and FWHM of that target
 
     Example Usage: targx, targy, fwhm = findFirst('path/to/img.fits')
 
@@ -789,8 +797,8 @@ def findFirst(imagepath, thresh=100, fwhmguess=5, bright=5):
     inputs
     ------------
     imagepath           : (string) path to fits image
-    thresh              : (optional, float) threshold parameter for DAOStarFinder
-    fwhmguess           : (optional, float) fwhm parameter for DAOStarFinder
+    thresh              : (optional, float) threshold parameter for IRAFStarFinder
+    fwhmguess           : (optional, float) fwhm parameter for IRAFStarFinder
     bright              : (optional, int) number of found stars to display
 
     outputs
@@ -801,7 +809,7 @@ def findFirst(imagepath, thresh=100, fwhmguess=5, bright=5):
     '''
     # plot results of quick starfinder to grab rough pos of target
     firstim = fits.getdata(imagepath)
-    firstSF = DAOStarFinder(thresh, fwhmguess, brightest=bright)
+    firstSF = IRAFStarFinder(thresh, fwhmguess, brightest=bright)
     table1 = firstSF.find_stars(firstim)
 
     norm = ImageNormalize(stretch=LogStretch())
@@ -811,10 +819,14 @@ def findFirst(imagepath, thresh=100, fwhmguess=5, bright=5):
     plt.imshow(firstim, origin='lower', norm=norm)
     apertures1.plot()
     plt.show()
-    print(table1['xcentroid', 'ycentroid', 'roundness1'])
+    print(table1['xcentroid', 'ycentroid', 'roundness'])
 
     # select index of target central star from table printed above
-    targind = int(input('input the 0 indexed integer of your target from the table above: '))
+    try:
+        targind = int(input('input the 0 indexed integer of your target from the table above: '))
+        a = table1['xcentroid'][targind]
+    except IndexError:
+        targind = int(input('remember to 0 index your target index: '))
     targx = int(table1['xcentroid'][targind])
     targy = int(table1['ycentroid'][targind])
 
@@ -853,7 +865,7 @@ def nircEPSF(imgpath, epsfsize=None, thresh=100, fwhmguess=5, bright=5,
     return epsf
 
 
-def makeEPSF(image, verb=True, plot=True):
+def makeEPSF(image, verb=False, plot=True):
     '''
     makeEPSF
     ---------
@@ -867,7 +879,7 @@ def makeEPSF(image, verb=True, plot=True):
     inputs
     ------------
     image       : (string) np.array image, centered on reference star psf
-    verbo       : (Bool) progress_bar parameter for EPSFBuilder
+    verb       : (Bool) Ask if psf is good
     plot        : (Bool) plot EPSF to check
 
     outputs
@@ -893,16 +905,24 @@ def makeEPSF(image, verb=True, plot=True):
         plt.colorbar()
         plt.show()
 
-    take = input('accept this epsf? (y/n): ')
-    if take == 'n':
-        epsf = None
+    if verb is True:
+        take = input('accept this epsf? (y/n): ')
+        if take == 'n':
+            epsf = None
 
     return epsf
+
+
+def angle_between(p1, p2):
+    deltaX = p1[0]-p2[0]
+    deltaY = p1[1]-p2[1]
+    return 180 - np.arctan2(deltaX, deltaY)/np.pi*180
 
 
 def calcBinDist(phot_results):
     '''
     '''
+    phot_results = phot_results[phot_results['x_0_unc'] < 1]
     pos = phot_results['x_fit', 'y_fit']
     unc = phot_results['x_0_unc', 'y_0_unc']
 
@@ -910,17 +930,31 @@ def calcBinDist(phot_results):
 
     seps = []
     errs = []
+    PAs = []
+    dPAs = []
     for i in range(len(pos)-1):
         x, y = pos[i]
         x1, y1 = pos[i+1]
         s = calcDistance(x, y, x1, y1)*pixel_scale*u.arcsec
+        s = s.to(u.mas)
+        phi = angle_between((x, y), (x1, y1))
+        PA = phi
+
         dx, dy = unc[i]
         dx1, dy1 = unc[i+1]
         ds = calcDistance(dx, dy, dx1, dy1)
         ds = (ds*pixel_scale*u.arcsec).to(u.mas)
 
-        print(s.to(u.mas), '+/-', ds)
+        dphi_max = angle_between((x-dx, y-dy), (x1+dx1, y1+dy1))
+        dphi_min = angle_between((x+dx, y+dy), (x1-dx1, y1-dy1))
+
+        dPA = dphi_max - dphi_min
+
+        print(s, '+/-', ds)
+        print(PA, '+/-', dPA)
         seps.append(s.value)
         errs.append(ds.value)
-    result = np.asarray([seps,errs])
+        PAs.append(PA)
+        dPAs.append(dPA)
+    result = np.asarray([seps[0], errs[0], PAs[0], dPAs[0]])
     return result

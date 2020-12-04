@@ -1,6 +1,7 @@
 # imports
 import os
 import glob
+import tqdm
 import datetime
 import numpy as np
 import scipy.signal
@@ -28,6 +29,17 @@ import astropy.units as u
 
 # functions
 def calcDistance(x0, y0, x1, y1):
+    '''
+    calcDistance
+    ------------
+    Calculates the euclidian straight line distance between two points
+
+    Example Usage: ds = calcDistance(x, y, x+dx, y+dy)
+
+    Modification History:
+    Written by William Balmer c.2020
+    Docstring added 12/3/2020
+    '''
     return np.sqrt((x1 - x0)**2 + (y1-y0)**2)
 
 
@@ -102,8 +114,8 @@ def badpixelcorrect(data_arr, badpixelmask, speed='fast'):
     corr_data = data_arr.copy()
     if speed == 'slow':
         # smooth the science image by a median filter to generate replacement
-        median_data = ndimage.median_filter(data_arr, size=(30, 30))
-        # replace the bad pixels with median of the local 30 pixels
+        median_data = ndimage.median_filter(data_arr, size=(10, 10))
+        # replace the bad pixels with median of the local 10 pixels
         corr_data[badpixelmask == 1] = median_data[badpixelmask == 1]
     else:
         corr_data[badpixelmask == 1] = np.nanmedian(data_arr)
@@ -123,7 +135,7 @@ def centroid(data_arr, xcen, ycen, nhalf=5, derivshift=1.):
     Modification History:
     Original implementation by M. Petersen, J. Lowenthal, K. Ward-Duong.
     Updated, provided to author by S. Betti. circa March 2020
-    Reproducted here 10/15/2020 by William Balmer
+    Reproduced here 10/15/2020 by William Balmer
 
     inputs
     ----------------
@@ -135,20 +147,17 @@ def centroid(data_arr, xcen, ycen, nhalf=5, derivshift=1.):
     derivshift    : (int, default=1) degree of shift to calculate derivative.
                      larger values can find shallower slopes more efficiently
 
-
-
     outputs
     ---------------
     tuple
     xcenf         : the centroided x value
     ycenf         : the centroided y value
 
+    if either center is a nan, returns an error
+
     dependencies
     ---------------
     numpy         : imported as np
-
-
-
 
     also see another implementation here:
     https://github.com/djones1040/PythonPhot/blob/master/PythonPhot/cntrd.py
@@ -182,7 +191,6 @@ def centroid(data_arr, xcen, ycen, nhalf=5, derivshift=1.):
 
     #
     # fancy comp sci part to find the local maximum
-    #
     # this uses line minimization using derivatives
     # (see text such as Press' Numerical Recipes Chapter 10),
     # treating X and Y dimensions as independent (generally safe for stars).
@@ -218,6 +226,10 @@ def centroid(data_arr, xcen, ycen, nhalf=5, derivshift=1.):
 
     ycenf = ycen - dy
 
+    # not sure if this will work with the crossimage except statement...
+    if xcenf or ycenf is np.nan:
+        raise ValueError
+
     return xcenf, ycenf
 
 
@@ -246,12 +258,10 @@ def cross_image(im1, im2, centerx, centery, boxsize=400, **kwargs):
     centery                  : (float) y-center of subregion in reference image
     boxsize                  : (integer) subregion of image to cross-correlate
 
-
     returns
     ---------------
     xshift                   : (float) x-shift in pixels
     yshift                   : (float) y-shift in pixels
-
 
     dependencies
     ---------------
@@ -295,7 +305,7 @@ def cross_image(im1, im2, centerx, centery, boxsize=400, **kwargs):
     try:  # try to use a centroiding algorithm to find a better peak
         xcenc, ycenc = centroid(corr_image.T, corr_tuple[0], corr_tuple[1],
                                 nhalf=10, derivshift=1.)
-    except:  # if centroiding algorithm fails, use just peak pixel
+    except ValueError:  # if centroiding algorithm fails, use just peak pixel
         xcenc, ycenc = corr_tuple
     finally:
         # Calculate shifts (distance from central pixel of cross-correlated im)
@@ -343,17 +353,12 @@ def createMasterDark(darklist, inttime, save='n', savepath='./'):
     '''
     # length of cube
     n = len(darklist)
-
     # gather first image info
     first_frame_data = fits.getdata(darklist[0])
-    first_frame_head = fits.getheader(darklist[0])
-
     # saves shape of images as variable
     imsize_y, imsize_x = first_frame_data.shape
-
     # creates empty stack of depth n
     fits_stack = np.zeros((imsize_y, imsize_x, n))
-
     # adds images to stack
     for ii in range(0, n):
         im = fits.getdata(darklist[ii])
@@ -363,13 +368,18 @@ def createMasterDark(darklist, inttime, save='n', savepath='./'):
         fits_stack[:, :, ii] = im2
 
     # takes median of stack, saves as var
-    med_frame = np.nanmedian(fits_stack, axis=2)
+    med_fullframe = np.nanmedian(fits_stack, axis=2)
 
-    if save == 'y':
-        savefile = savepath+'/medDark'+str(inttime)+'sInt.fits'
-        fits.writeto(savefile, med_frame, first_frame_head, overwrite=True)
-    else:
-        return med_frame
+    # need to account for different FOVs
+    # full frame: 1024/512
+    # strip: 1024/300
+    # stamp: 400/200
+    # substamp: 100/50
+    med_strip = med_fullframe[212:512]
+    med_stamp = med_fullframe[312:512, 0:400]
+    med_substamp = med_fullframe[462:512, 0:100]
+
+    return med_fullframe, med_strip, med_stamp, med_substamp
 
 
 def darkSub(image, imgint, masterdark, masterdark_int):
@@ -379,48 +389,78 @@ def darkSub(image, imgint, masterdark, masterdark_int):
     image array
     '''
     dark = imgint*(masterdark/masterdark_int)
-    # some imgs are like 300 pix tall and need to be padded to 512
-    if dark.shape[0] > image.shape[0]:
-        newim = np.zeros((dark.shape[0], dark.shape[1]))
-        numbery = dark.shape[0] - image.shape[0]
-        if dark.shape[1] > image.shape[1]:
-            numberx = dark.shape[1] - image.shape[1]
-            newim[numbery:newim.shape[0], numberx:newim.shape[1]] = image
-        else:
-            newim[numbery:newim.shape[0], :newim.shape[1]] = image
-        sub = newim-dark
-    else:
-        sub = image-dark
-
-    return sub
+    return image-dark
 
 
-def runSubtraction(imlist, masterdark, masterdark_int, badpixelmask):
+def runClioSubtraction(imlist, darks, masterdark_int, badpixelmaskspath):
     '''
-
+    linearizes, dark subtracts, and bad pixel corrects clio data from list
     '''
-    for im in imlist:
+    # need to account for different FOVs
+    # full frame: 1024/512
+    bpff = badpixelmaskspath+'\\badpix_fullframe.fit'
+    # strip: 1024/300
+    bpstrp = badpixelmaskspath+'\\badpix_strip.fit'
+    # stamp: 400/200
+    bpstmp = badpixelmaskspath+'\\badpix_stamp.fit'
+    # substamp: 100/50
+    bpsub = badpixelmaskspath+'\\badpix_substamp.fit'
+    # bad pixel dict
+    bps = {512: bpff, 300: bpstrp, 200: bpstmp, 50: bpsub}
+    # darks dict
+    dark_fullframe, dark_strip, dark_stamp, dark_substamp = darks
+    darkdict = {512: dark_fullframe, 300: dark_strip, 200: dark_stamp, 50: dark_substamp}
+
+    # begin subtraction loop
+    for im in tqdm.tqdm(imlist):
         hdr = fits.getheader(im)
         imgint = hdr['INT']
         imgdata = fits.getdata(im)
         # check if cube:
         if len(imgdata.shape) > 2:
+            newcube = np.zeros((imgdata.shape[0], imgdata.shape[1], imgdata.shape[2]))
             for i in range(imgdata.shape[0]):
+                ylen = imgdata.shape[1]
+                if ylen in bps:
+                    badpixelmask = fits.getdata(bps[ylen])
+                    masterdark = darkdict[ylen]
+                else:
+                    errstrng = 'Image in list does not have bad pixel mask: '+im
+                    raise ValueError(errstrng)
                 # decoadd
-                imcoadd = imgdata[i]/hdr['COADDS']
+                imcoadd = np.divide(imgdata[i], int(hdr['COADDS']))
                 # linearize
                 imlin = linearizeClio2(imcoadd)
                 # dark subtract
                 imsub = darkSub(imlin, imgint, masterdark, masterdark_int)
                 # bad pixel correct
                 imbpcorr = badpixelcorrect(imsub, badpixelmask)
+                # add to newcube
+                newcube[i] = imbpcorr
 
-                newpath = im.replace('.fit', '_LDBP_im'+str(i+1)+'.fit')
+            newpath = im.replace('.fit', '_LDBP.fit')
 
-                fits.writeto(newpath, imbpcorr, hdr, overwrite=True)
+            newcoadded = np.nanmedian(newcube, axis=0)
+            newhdr = hdr
+            newhdr['COADDS'] = str(len(imgdata.shape))
+            newhdr['HISTORY'] = '--------------------------'
+            newhdr['COMMENT'] = '    Reduction History     '
+            newhdr['COMMENT'] = '--------------------------'
+            now = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+            history = 'Linearized, Dark subtracted, and bad pixel corrected '+ now
+            newhdr['COMMENT'] = history
+
+            fits.writeto(newpath, newcoadded, newhdr, overwrite=True)
         else:
+            ylen = imgdata.shape[0]
+            if ylen in bps:
+                badpixelmask = fits.getdata(bps[ylen])
+                masterdark = darkdict[ylen]
+            else:
+                errstrng = 'Image in list does not have bad pixel mask: '+im
+                raise ValueError(errstrng)
             # decoadd
-            imcoadd = imgdata/hdr['COADDS']
+            imcoadd = np.divide(imgdata, int(hdr['COADDS']))
             # linearize
             imlin = linearizeClio2(imcoadd)
             # dark subtract
@@ -430,9 +470,86 @@ def runSubtraction(imlist, masterdark, masterdark_int, badpixelmask):
 
             newpath = im.replace('.fit', '_LDBP.fit')
 
+            hdr['HISTORY'] = '--------------------------'
+            hdr['COMMENT'] = '    Reduction History     '
+            hdr['COMMENT'] = '--------------------------'
+            history = 'Linearized, Dark subtracted, and bad pixel corrected '+ datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+            hdr['COMMENT'] = history
+
             fits.writeto(newpath, imbpcorr, hdr, overwrite=True)
 
     return ('Data is linearized, dark subtracted, and bad pixel corrected!')
+
+
+def clioNodSub(reduced_data, savepath):
+    '''
+    performs nod subtraction on reduced clio data
+    '''
+    for dataset in tqdm.tqdm(reduced_data):
+        # ignoring stamps, the data isn't great and they're a pain
+        stamps = []
+
+        for im in dataset:
+            imgdata = fits.getdata(im)
+            if imgdata.shape[1] < 1024:
+                stamps.append(im)
+
+        imlist = [im for im in dataset if im not in stamps]
+        im1 = imlist[0]
+        im1data = fits.getdata(im1)
+
+        # gather info on the nods, make dictionaries to hold data
+        nods = []
+        nod_dict = {}
+        nod_cubes = {}
+        nod_meds = {}
+        img_dict = {}
+
+        for im in imlist:
+            imgdata = fits.getdata(im)
+            # this is to match a header to the final nod subtracted image
+            # assumes that each image will sum to a unique value (ok assumption I think)
+            img_dict[np.sum(imgdata)] = im
+            # this is to determine the nod from the header
+            hdr = fits.getheader(im)
+            nod_dict[im] = hdr['BEAM']
+            if hdr['BEAM'] not in nods:
+                nods.append(hdr['BEAM'])
+
+        for nod in nods:
+            ims = [key for (key, value) in nod_dict.items() if value == nod]
+            nod_cube = np.zeros((len(ims), im1data.shape[0], im1data.shape[1]))
+            for i in range(len(ims)):
+                im = ims[i]
+                imdata = fits.getdata(im)
+                # add image to cube
+                nod_cube[i] = imdata
+            # add nod_cube to dictionary for later
+            nod_cubes[nod] = nod_cube
+            nod_meds[nod] = np.nanmedian(nod_cube, axis=0)
+
+        for nod in nods:
+            nod_cube = nod_cubes[nod]
+            othernods = [n for n in nods if n != nod]
+            opposing_nod_meds = np.zeros((len(othernods), im1data.shape[0], im1data.shape[1]))
+            for i in range(len(othernods)):
+                opposing_nod_meds[i] = nod_meds[othernods[i]]
+            opposing_med = np.nanmedian(opposing_nod_meds, axis=0)
+            for im in nod_cube:
+                # nod subtract
+                nodsub = im-opposing_med
+                # fill values 1sigma below median with median (gets rid of ugly negative blobs)
+                nodsub[nodsub < (np.nanmedian(nodsub)-np.std(nodsub))] = np.nanmedian(nodsub)
+                # find original image path
+                orig_str = img_dict[np.sum(im)]
+                # edit header
+                hdr = fits.getheader(orig_str)
+                morehistory = 'Nod subtracted '+ datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                hdr['COMMENT'] = morehistory
+                # new filename
+                new_str = orig_str.replace('.fit', '_nodsub.fit')
+                new_str = savepath+new_str.split('\\')[-1]
+                fits.writeto(new_str, nodsub, hdr, overwrite=True)
 
 
 def crosscube(imcube, cenx, ceny, box=50, returnmed='y', returncube='n'):
@@ -467,93 +584,6 @@ def crosscube(imcube, cenx, ceny, box=50, returnmed='y', returncube='n'):
         return cube
     elif returnmed == 'y' and returncube == 'y':
         return median_image, cube
-
-
-def nodSubtraction(imlist, path='nodsubcube.fits'):
-    '''
-
-    '''
-    # get first image for shape of cubes
-    im1 = imlist[0]
-    im1data = fits.getdata(im1)
-    im1head = fits.getheader(im1)
-
-    # create list of nods
-    nod1 = []
-    nod2 = []
-    for im in imlist:
-        hdr = fits.getheader(im)
-        if hdr['BEAM'] == 0:
-            nod1.append(im)
-        elif hdr['BEAM'] == 1:
-            nod2.append(im)
-        else:
-            print('there are more than two nods!')
-    # prepare median nods for subtraction
-    nod_A_cube = np.zeros((len(nod1), im1data.shape[0], im1data.shape[1]))
-    nod_B_cube = np.zeros((len(nod2), im1data.shape[0], im1data.shape[1]))
-
-    j = 0
-    k = 0
-    for i in range(len(imlist)):
-        img = imlist[i]
-        imdata = fits.getdata(img)
-        if img in nod1:
-            nod_A_cube[j] = imdata
-            j += 1
-        elif img in nod2:
-            nod_B_cube[k] = imdata
-            k += 1
-
-    a_nod_med = np.nanmedian(nod_A_cube, axis=0)
-    b_nod_med = np.nanmedian(nod_B_cube, axis=0)
-
-    # perform nod subtraction on each image
-    nodsubs = np.zeros((len(imlist), im1data.shape[0], im1data.shape[1]))
-    j = 0
-    k = 0
-    for i in range(len(imlist)):
-        img = imlist[i]
-        if img in nod1:
-            # subtract opposite nod median from single image
-            imdata = nod_A_cube[j]
-            bg_sub_imdata = b_nod_med - imdata  # imdata - b_nod_med
-            nodsubs[i] = bg_sub_imdata
-            j += 1
-        elif img in nod2:
-            imdata = nod_B_cube[k]
-            bg_sub_imdata = a_nod_med - imdata  # imdata - a_nod_med
-            nodsubs[i] = bg_sub_imdata
-            k += 1
-
-    # write the cube of unshifted nod subtracted images to disk
-    fits.writeto(path, nodsubs, header=im1head, overwrite=True)
-
-    return print('Cube of nod subtracted data writen to '+path)
-
-
-def shiftNoddedData(cubepath, ret='y', cube='n', med='n'):
-    '''
-
-    '''
-    nodsubcube = fits.getdata(cubepath)
-    head = fits.getdata(cubepath)
-    # run cross correlation shift, get cube and median image
-    shiftnodsubmed, shiftnodsubcube = crosscube(nodsubcube, cenx=250,
-                                                ceny=250, box=250,
-                                                returnmed='y',
-                                                returncube='y')
-
-    if cube == 'y':
-        fits.writeto(cubepath.replace('.fits', '_shiftcube.fits'),
-                     shiftnodsubcube, header=head, overwrite=True)
-
-    if med == 'y':
-        fits.writeto(cubepath.replace('.fits', '_shiftmed.fits'),
-                     shiftnodsubcube, header=head, overwrite=True)
-
-    if ret == 'y':
-        return shiftnodsubmed, shiftnodsubcube
 
 
 def filelister(filelist, day, band, targ, datedict, wavedict, objdict):
@@ -647,33 +677,28 @@ def sortData(datadir, instrument='CLIO2', filesufx='*.fit*', returntab=False):
         return datasets, darks
 
 
-def runtheReduction(datadir, badpixelpath, intTime=300):
+def runClioReduction(datadir, badpixelpath, intTime=300):
     '''
+    reduces (linearize, dark, bad pix, nod sub) all clio data in datadir
     '''
     # get data
     datasets, darks = sortData(datadir)
-    # get bad pixel map
-    badpixelmap = fits.getdata(badpixelpath)
     # create master dark
     med_dark = createMasterDark(darks, intTime)
     # loop through datasets and correct them
     for dataset in datasets:
-        runSubtraction(dataset, med_dark, intTime, badpixelmap)
+        runClioSubtraction(dataset, med_dark, intTime, badpixelpath)
     # get new subtracted data
     reduced_data, darks2 = sortData(datadir, filesufx='*_LDBP*.fit*')
     # run nodSubtraction
-    for dataset in reduced_data:
-        savepath = datadir+'/reduced/'
-        try:
-            os.makedirs(savepath)
-        except OSError:
-            print('putting files in an existing folder.')
-        head = fits.getheader(dataset[0])
-        band, name, datetime = head['PASSBAND'], head['CID'], head['DATE']
-        date = datetime.split('T')[0]
-        name = name.split(' * ')[-1]
-        filename = name+'_'+band+'_'+date+'_nodsub.fits'
-        nodSubtraction(dataset, path=savepath+filename)
+    savepath = datadir+'/reduced/'
+
+    try:
+        os.makedirs(savepath)
+    except OSError:
+        print('putting files in an existing folder.')
+
+    clioNodSub(reduced_data, savepath)
 
     return print('Done reducing the files')
 

@@ -703,7 +703,7 @@ def runClioReduction(datadir, badpixelpath, intTime=300):
     return print('Done reducing the files')
 
 
-def starLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
+def NIRCLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
                epsfstamp=None, plot=True, roundness=0.5, crit_sep=15,
                iterations=1, setfwhm=False):
     '''
@@ -743,9 +743,15 @@ def starLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
     date_time_obj = datetime.datetime.strptime(date, '%Y-%m-%d')
     pixturnover = datetime.datetime.strptime('2015-5-13', '%Y-%m-%d')
     if date_time_obj.date() > pixturnover.date():
-        pixel_scale = 0.009971
+        pixel_scale = 0.009971  # arcsec
+        pix_err = 0.005  # milliarcsec
+        na_offset = -0.262  # degree
+        na_err = 0.020  # degree
     else:
-        pixel_scale = float(head['PIXSCALE'])
+        pixel_scale = 0.009952
+        pix_err = 0.002
+        na_offset = -0.252
+        na_err = 0.009
 
     epsf = nircEPSF(imagepath, epsfsize=epsfstamp)
 
@@ -764,29 +770,51 @@ def starLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
     y1 = int(targy+(stampsize/2))
     stamp = data[y0:y1, x0:x1]
 
-    daogroup = DAOGroup(crit_separation=crit_sep)
-    mmm_bkg = MMMBackground()
-    if setfwhm is True:
-        fwhm = fwhmguess
-    finder = IRAFStarFinder(thresh, fwhm, roundlo=-roundness, roundhi=roundness,
-                           sigma_radius=3)
-    fitter = LevMarLSQFitter()
-    phot_obj = IterativelySubtractedPSFPhotometry(finder=finder,
-                                                  group_maker=daogroup,
-                                                  bkg_estimator=mmm_bkg,
-                                                  psf_model=epsf,
-                                                  fitter=fitter,
-                                                  fitshape=int(stampsize/2),
-                                                  niters=iterations,
-                                                  aperture_radius=7)
+    try:
+        daogroup = DAOGroup(crit_separation=crit_sep)
+        mmm_bkg = MMMBackground()
+        if setfwhm is True:
+            fwhm = fwhmguess
+        finder = IRAFStarFinder(thresh, fwhm, roundlo=-roundness,
+                                roundhi=roundness, sigma_radius=3)
+        fitter = LevMarLSQFitter()
+        phot_obj = IterativelySubtractedPSFPhotometry(finder=finder,
+                                                      group_maker=daogroup,
+                                                      bkg_estimator=mmm_bkg,
+                                                      psf_model=epsf,
+                                                      fitter=fitter,
+                                                      fitshape=int(stampsize/2),
+                                                      niters=iterations,
+                                                      aperture_radius=7)
+        phot_results = phot_obj(stamp)
+        print('Stars found at positions')
+        print(phot_results['x_0', 'y_0'][0])
+        print(phot_results['x_0', 'y_0'][1])
 
-    phot_results = phot_obj(stamp)
-    norm = ImageNormalize(stretch=LogStretch())
+    except IndexError:  # this happens when the threshold is too high
+        newthresh = int(input('found fewer than 2 stars! re-enter threshold? >'))
+        newfinder = IRAFStarFinder(newthresh, fwhm, roundlo=-roundness,
+                                roundhi=roundness, sigma_radius=3)
+        fitter = LevMarLSQFitter()
+        phot_obj = IterativelySubtractedPSFPhotometry(finder=newfinder,
+                                                      group_maker=daogroup,
+                                                      bkg_estimator=mmm_bkg,
+                                                      psf_model=epsf,
+                                                      fitter=fitter,
+                                                      fitshape=int(stampsize/2),
+                                                      niters=iterations,
+                                                      aperture_radius=7)
+        phot_results = phot_obj(stamp)
+        print('Stars found at positions')
+        print(phot_results['x_0', 'y_0'][0])
+        print(phot_results['x_0', 'y_0'][1])
+
     pos = phot_results['x_0', 'y_0']
     positions = np.transpose((pos['x_0'], pos['y_0']))
     apertures = CircularAperture(positions, r=fwhm)
 
     if plot is True:
+        norm = ImageNormalize(stretch=LogStretch())
         plt.figure(figsize=(9, 9))
         plt.subplot(1, 2, 1)
         plt.imshow(stamp, origin='lower', norm=norm)
@@ -800,6 +828,9 @@ def starLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
         plt.colorbar(orientation='horizontal')
 
     phot_results['pixscale'] = pixel_scale
+    phot_results['pixerr'] = pix_err
+    phot_results['PAoff'] = na_offset
+    phot_results['PAofferr'] = na_err
     phot_results['date'] = date
 
     result = calcBinDist(phot_results)
@@ -952,6 +983,9 @@ def calcBinDist(phot_results):
     unc = phot_results['x_0_unc', 'y_0_unc']
 
     pixel_scale = phot_results['pixscale'][0]
+    pixel_err = phot_results['pixerr'][0]
+    # na_offset = phot_results['PAoff'][0]  # I don't think this is necessary
+    na_err = phot_results['PAofferr'][0]  # bc Rob's data is already rotated
 
     seps = []
     errs = []
@@ -960,25 +994,29 @@ def calcBinDist(phot_results):
     for i in range(len(pos)-1):
         x, y = pos[i]
         x1, y1 = pos[i+1]
-        s = calcDistance(x, y, x1, y1)*pixel_scale*u.arcsec
-        s = s.to(u.mas)
+        s = calcDistance(x, y, x1, y1)
+        sep = (s*pixel_scale*u.arcsec).to(u.mas)
         phi = angle_between((x, y), (x1, y1))
-        PA = phi
+        PA = phi  # +na_offset
 
         dx, dy = unc[i]
         dx1, dy1 = unc[i+1]
         ds = calcDistance(dx, dy, dx1, dy1)
-        ds = (ds*pixel_scale*u.arcsec).to(u.mas)
+        # propagate err in quadrature
+        ds2 = ((ds/s)**2)+((pixel_err*u.mas/(pixel_scale*u.arcsec).to(u.mas))**2)
+        ds_tot = np.sqrt(ds2)*sep
 
         dphi_max = angle_between((x-dx, y-dy), (x1+dx1, y1+dy1))
         dphi_min = angle_between((x+dx, y+dy), (x1-dx1, y1-dy1))
 
         dPA = dphi_max - dphi_min
-
-        print(s, '+/-', ds)
+        # propagate err in quadrature
+        dPA = np.sqrt(na_err**2 + dPA**2)
+        print('')
+        print(sep, '+/-', ds_tot)
         print(PA, '+/-', dPA)
-        seps.append(s.value)
-        errs.append(ds.value)
+        seps.append(sep.value)
+        errs.append(ds_tot.value)
         PAs.append(PA)
         dPAs.append(dPA)
     result = np.asarray([seps[0], errs[0], PAs[0], dPAs[0]])

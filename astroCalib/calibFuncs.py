@@ -84,7 +84,7 @@ def linearizeClio2(rawimage):
     return new
 
 
-def badpixelcorrect(data_arr, badpixelmask, speed='fast'):
+def badpixelcorrect(data_arr, badpixelmask, speed='fast', area=None):
     '''
     badpixelcorrect
     ---------------
@@ -97,6 +97,7 @@ def badpixelcorrect(data_arr, badpixelmask, speed='fast'):
     Modification History:
     Provided to author by Kim Ward-Duong circa March 2020
     Reproduced here 10/13/2020 by William Balmer
+    Added interp region functionality 12/12/2020
 
     inputs
     ------
@@ -106,6 +107,7 @@ def badpixelcorrect(data_arr, badpixelmask, speed='fast'):
     speed         : (str) whether to calculate the median filtered image
                     (computationally intensive), or simply take the image
                     median. Default = 'fast'
+    area          : (int or float) region to interpolate median for slow
 
     outputs
     -------
@@ -113,8 +115,12 @@ def badpixelcorrect(data_arr, badpixelmask, speed='fast'):
     '''
     corr_data = data_arr.copy()
     if speed == 'slow':
+        if area is None:
+            area = int(10)
+        else:
+            area = int(area)
         # smooth the science image by a median filter to generate replacement
-        median_data = ndimage.median_filter(data_arr, size=(10, 10))
+        median_data = ndimage.median_filter(data_arr, size=(area, area))
         # replace the bad pixels with median of the local 10 pixels
         corr_data[badpixelmask == 1] = median_data[badpixelmask == 1]
     else:
@@ -346,55 +352,9 @@ def shift_image(image, xshift, yshift):
     return shift(image, (xshift, yshift))
 
 
-def createMasterDark(darklist, inttime, save='n', savepath='./'):
+def runClioSubtraction(imlist, badpixelmaskspath, interparea=2):
     '''
-    Takes a list of darks, scales them to some common integration time
-    and returns the result
-    '''
-    # length of cube
-    n = len(darklist)
-    # gather first image info
-    first_frame_data = fits.getdata(darklist[0])
-    # saves shape of images as variable
-    imsize_y, imsize_x = first_frame_data.shape
-    # creates empty stack of depth n
-    fits_stack = np.zeros((imsize_y, imsize_x, n))
-    # adds images to stack
-    for ii in range(0, n):
-        im = fits.getdata(darklist[ii])
-        hdr = fits.getheader(darklist[ii])
-        intT = hdr['INT']
-        im2 = inttime*(im/intT)
-        fits_stack[:, :, ii] = im2
-
-    # takes median of stack, saves as var
-    med_fullframe = np.nanmedian(fits_stack, axis=2)
-
-    # need to account for different FOVs
-    # full frame: 1024/512
-    # strip: 1024/300
-    # stamp: 400/200
-    # substamp: 100/50
-    med_strip = med_fullframe[212:512]
-    med_stamp = med_fullframe[312:512, 0:400]
-    med_substamp = med_fullframe[462:512, 0:100]
-
-    return med_fullframe, med_strip, med_stamp, med_substamp
-
-
-def darkSub(image, imgint, masterdark, masterdark_int):
-    '''
-    Takes in an image array, a masterdark array, the integration time
-    for that masterdark, and returns the dark subtraction of that
-    image array
-    '''
-    dark = imgint*(masterdark/masterdark_int)
-    return image-dark
-
-
-def runClioSubtraction(imlist, darks, masterdark_int, badpixelmaskspath):
-    '''
-    linearizes, dark subtracts, and bad pixel corrects clio data from list
+    linearizes and bad pixel corrects clio data from list
     '''
     # need to account for different FOVs
     # full frame: 1024/512
@@ -407,14 +367,10 @@ def runClioSubtraction(imlist, darks, masterdark_int, badpixelmaskspath):
     bpsub = badpixelmaskspath+'\\badpix_substamp.fit'
     # bad pixel dict
     bps = {512: bpff, 300: bpstrp, 200: bpstmp, 50: bpsub}
-    # darks dict
-    dark_fullframe, dark_strip, dark_stamp, dark_substamp = darks
-    darkdict = {512: dark_fullframe, 300: dark_strip, 200: dark_stamp, 50: dark_substamp}
 
     # begin subtraction loop
     for im in tqdm.tqdm(imlist):
         hdr = fits.getheader(im)
-        imgint = hdr['INT']
         imgdata = fits.getdata(im)
         # check if cube:
         if len(imgdata.shape) > 2:
@@ -423,7 +379,6 @@ def runClioSubtraction(imlist, darks, masterdark_int, badpixelmaskspath):
                 ylen = imgdata.shape[1]
                 if ylen in bps:
                     badpixelmask = fits.getdata(bps[ylen])
-                    masterdark = darkdict[ylen]
                 else:
                     errstrng = 'Image in list does not have bad pixel mask: '+im
                     raise ValueError(errstrng)
@@ -431,31 +386,25 @@ def runClioSubtraction(imlist, darks, masterdark_int, badpixelmaskspath):
                 imcoadd = np.divide(imgdata[i], int(hdr['COADDS']))
                 # linearize
                 imlin = linearizeClio2(imcoadd)
-                # dark subtract
-                imsub = darkSub(imlin, imgint, masterdark, masterdark_int)
                 # bad pixel correct
-                imbpcorr = badpixelcorrect(imsub, badpixelmask)
+                imbpcorr = badpixelcorrect(imlin, badpixelmask, speed='slow', area=interparea)
                 # add to newcube
                 newcube[i] = imbpcorr
 
-            newpath = im.replace('.fit', '_LDBP.fit')
+            newpath = im.replace('.fit', '_LBP.fit')
 
             newcoadded = np.nanmedian(newcube, axis=0)
             newhdr = hdr
             newhdr['COADDS'] = str(len(imgdata.shape))
-            newhdr['HISTORY'] = '--------------------------'
-            newhdr['COMMENT'] = '    Reduction History     '
-            newhdr['COMMENT'] = '--------------------------'
             now = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-            history = 'Linearized, Dark subtracted, and bad pixel corrected '+ now
-            newhdr['COMMENT'] = history
+            history = 'Linearized and bad pixel corrected ' + now
+            newhdr['HISTORY'] = history
 
             fits.writeto(newpath, newcoadded, newhdr, overwrite=True)
         else:
             ylen = imgdata.shape[0]
             if ylen in bps:
                 badpixelmask = fits.getdata(bps[ylen])
-                masterdark = darkdict[ylen]
             else:
                 errstrng = 'Image in list does not have bad pixel mask: '+im
                 raise ValueError(errstrng)
@@ -463,22 +412,16 @@ def runClioSubtraction(imlist, darks, masterdark_int, badpixelmaskspath):
             imcoadd = np.divide(imgdata, int(hdr['COADDS']))
             # linearize
             imlin = linearizeClio2(imcoadd)
-            # dark subtract
-            imsub = darkSub(imlin, imgint, masterdark, masterdark_int)
             # bad pixel correct
-            imbpcorr = badpixelcorrect(imsub, badpixelmask)
+            imbpcorr = badpixelcorrect(imlin, badpixelmask, speed='slow', area=interparea)
 
-            newpath = im.replace('.fit', '_LDBP.fit')
+            newpath = im.replace('.fit', '_LBP.fit')
 
-            hdr['HISTORY'] = '--------------------------'
-            hdr['COMMENT'] = '    Reduction History     '
-            hdr['COMMENT'] = '--------------------------'
-            history = 'Linearized, Dark subtracted, and bad pixel corrected '+ datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-            hdr['COMMENT'] = history
+            hdr['HISTORY'] = 'Linearized and bad pixel corrected '+ datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
             fits.writeto(newpath, imbpcorr, hdr, overwrite=True)
 
-    return ('Data is linearized, dark subtracted, and bad pixel corrected!')
+    return ('Data is linearized and bad pixel corrected!')
 
 
 def clioNodSub(reduced_data, savepath):
@@ -539,13 +482,14 @@ def clioNodSub(reduced_data, savepath):
                 # nod subtract
                 nodsub = im-opposing_med
                 # fill values 1sigma below median with median (gets rid of ugly negative blobs)
-                nodsub[nodsub < (np.nanmedian(nodsub)-np.std(nodsub))] = np.nanmedian(nodsub)
+                # nodsub[nodsub < (np.nanmedian(nodsub)-np.std(nodsub))] = np.nanmedian(nodsub)
                 # find original image path
                 orig_str = img_dict[np.sum(im)]
                 # edit header
                 hdr = fits.getheader(orig_str)
-                morehistory = 'Nod subtracted '+ datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-                hdr['COMMENT'] = morehistory
+                hdr['BEAM'] = nod
+                morehistory = 'Nod subtracted '+datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                hdr['HISTORY2'] = morehistory
                 # new filename
                 new_str = orig_str.replace('.fit', '_nodsub.fit')
                 new_str = savepath+new_str.split('\\')[-1]
@@ -601,7 +545,7 @@ def filelister(filelist, day, band, targ, datedict, wavedict, objdict):
     return thelist
 
 
-def sortData(datadir, instrument='CLIO2', filesufx='*.fit*', returntab=False):
+def sortData(datadir, filesdeep='*\\', instrument='CLIO2', filesufx='*.fit*', returntab=False):
     '''
     Sorts through a data directory filled with Clio data, sorts it by epoch,
     target, and passband and returns lists of sorted data, as well as a list of
@@ -621,7 +565,7 @@ def sortData(datadir, instrument='CLIO2', filesufx='*.fit*', returntab=False):
     objdict = {}
     datedict = {}
 
-    images = glob.glob(datadir+'\\*\\'+filesufx)
+    images = glob.glob(datadir+'\\'+filesdeep+filesufx)
 
     if images is []:
         raise FileNotFoundError("Empty data directory!")
@@ -677,19 +621,17 @@ def sortData(datadir, instrument='CLIO2', filesufx='*.fit*', returntab=False):
         return datasets, darks
 
 
-def runClioReduction(datadir, badpixelpath, intTime=300):
+def runClioReduction(datadir, badpixelpath):
     '''
-    reduces (linearize, dark, bad pix, nod sub) all clio data in datadir
+    reduces (linearize, bad pix, nod sub) all clio data in datadir
     '''
     # get data
     datasets, darks = sortData(datadir)
-    # create master dark
-    med_dark = createMasterDark(darks, intTime)
     # loop through datasets and correct them
     for dataset in datasets:
-        runClioSubtraction(dataset, med_dark, intTime, badpixelpath)
+        runClioSubtraction(dataset, badpixelpath)
     # get new subtracted data
-    reduced_data, darks2 = sortData(datadir, filesufx='*_LDBP*.fit*')
+    reduced_data, darks2 = sortData(datadir, filesufx='*_LBP*.fit*')
     # run nodSubtraction
     savepath = datadir+'/reduced/'
 

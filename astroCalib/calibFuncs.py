@@ -645,11 +645,127 @@ def runClioReduction(datadir, badpixelpath):
     return print('Done reducing the files')
 
 
+def ClioLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
+               epsfstamp=None, plot=True, roundness=0.5, crit_sep=15,
+               iterations=1, setfwhm=False):
+    '''
+    ClioLocate
+    ---------
+    User selects reference psf source, then target source from image
+    which is called via fits.getdata from imagepath. Returns the iterative
+    photometry result ran on the target, which yields accurate position
+
+    Example Usage: targx, targy, fwhm = findFirst('path/to/img.fits')
+
+    Modification History:
+    Initialized by William Balmer 10/30/2020
+
+    inputs
+    ------------
+    imagepath           : (string) path to fits image
+    thresh              : (float) threshold parameter for IRAFStarFinder
+    fwhmguess           : (float) fwhm parameter for IRAFStarFinder
+    bright              : (int) number of found stars to display
+    stampsize           : (optional, int, default=None) size of subregion of image to analyse
+    plot                : (optional, bool, default=True) plot results or not
+    roundness           : (optional, float, default=0.5) roundlo, roundhi parameter for IRAFStarFinder
+    crit_sep            : (optional, float, default=15)
+    iterations          : (optional, int, default=1) iterations for IterativelySubtractedPSFPhotometry
+    setfwhm             : (optional, bool, default=False) use fwhmguess as fwhm
+
+    outputs
+    ------------
+    phot_results        : (astropy.table object)
+    '''
+    # read in data
+    data = fits.getdata(imagepath)
+    # read in img header
+    head = fits.getheader(imagepath)
+
+    epsf = nircEPSF(imagepath, epsfsize=epsfstamp)
+
+    print('Select your target system to fit positions to')
+    targx, targy, fwhm = findFirst(imagepath, thresh=thresh,
+                                   fwhmguess=fwhmguess, bright=bright)
+
+    if stampsize is None:
+        stampsize = int(input('input the size of stamp: '))
+    elif stampsize is not int:
+        stampsize = int(stampsize)
+
+    x0 = int(targx-(stampsize/2))
+    x1 = int(targx+(stampsize/2))
+    y0 = int(targy-(stampsize/2))
+    y1 = int(targy+(stampsize/2))
+    stamp = data[y0:y1, x0:x1]
+
+    try:
+        daogroup = DAOGroup(crit_separation=crit_sep)
+        mmm_bkg = MMMBackground()
+        if setfwhm is True:
+            fwhm = fwhmguess
+        finder = IRAFStarFinder(thresh, fwhm, roundlo=-roundness,
+                                roundhi=roundness, sigma_radius=3)
+        fitter = LevMarLSQFitter()
+        phot_obj = IterativelySubtractedPSFPhotometry(finder=finder,
+                                                      group_maker=daogroup,
+                                                      bkg_estimator=mmm_bkg,
+                                                      psf_model=epsf,
+                                                      fitter=fitter,
+                                                      fitshape=int(stampsize/2),
+                                                      niters=iterations,
+                                                      aperture_radius=7)
+        phot_results = phot_obj(stamp)
+        print('Stars found at positions')
+        print(phot_results['x_0', 'y_0'][0])
+        print(phot_results['x_0', 'y_0'][1])
+
+    except IndexError:  # this happens when the threshold is too high
+        newthresh = int(input('found fewer than 2 stars! re-enter threshold? >'))
+        newfinder = IRAFStarFinder(newthresh, fwhm, roundlo=-roundness,
+                                roundhi=roundness, sigma_radius=3)
+        fitter = LevMarLSQFitter()
+        phot_obj = IterativelySubtractedPSFPhotometry(finder=newfinder,
+                                                      group_maker=daogroup,
+                                                      bkg_estimator=mmm_bkg,
+                                                      psf_model=epsf,
+                                                      fitter=fitter,
+                                                      fitshape=int(stampsize/2),
+                                                      niters=iterations,
+                                                      aperture_radius=7)
+        phot_results = phot_obj(stamp)
+        print('Stars found at positions')
+        print(phot_results['x_0', 'y_0'][0])
+        print(phot_results['x_0', 'y_0'][1])
+
+    pos = phot_results['x_0', 'y_0']
+    positions = np.transpose((pos['x_0'], pos['y_0']))
+    apertures = CircularAperture(positions, r=fwhm)
+
+    if plot is True:
+        norm = ImageNormalize(stretch=LogStretch())
+        plt.figure(figsize=(9, 9))
+        plt.subplot(1, 2, 1)
+        plt.imshow(stamp, origin='lower', norm=norm)
+        apertures.plot(color='red', lw=1.5, alpha=0.7)
+        plt.colorbar(orientation='horizontal')
+
+        plt.subplot(1, 2, 2)
+        plt.imshow(phot_obj.get_residual_image(), cmap='viridis', norm=norm,
+                   origin='lower', interpolation='nearest', aspect=1)
+        apertures.plot(color='red', lw=1.5, alpha=0.7)
+        plt.colorbar(orientation='horizontal')
+
+    result = calcBinDist(phot_results, scale='n')
+
+    return result
+
+
 def NIRCLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
                epsfstamp=None, plot=True, roundness=0.5, crit_sep=15,
                iterations=1, setfwhm=False):
     '''
-    starLocate
+    NIRCLocate
     ---------
     User selects reference psf source, then target source from image
     which is called via fits.getdata from imagepath. Returns the iterative
@@ -917,17 +1033,20 @@ def angle_between(p1, p2):
     return 180 - np.arctan2(deltaX, deltaY)/np.pi*180
 
 
-def calcBinDist(phot_results):
+def calcBinDist(phot_results, scale='y'):
     '''
     '''
+
     phot_results = phot_results[phot_results['x_0_unc'] < 1]
     pos = phot_results['x_fit', 'y_fit']
     unc = phot_results['x_0_unc', 'y_0_unc']
 
-    pixel_scale = phot_results['pixscale'][0]
-    pixel_err = phot_results['pixerr'][0]
-    # na_offset = phot_results['PAoff'][0]  # I don't think this is necessary
-    na_err = phot_results['PAofferr'][0]  # bc Rob's data is already rotated
+    if scale == 'y':
+
+        pixel_scale = phot_results['pixscale'][0]
+        pixel_err = phot_results['pixerr'][0]
+        # na_offset = phot_results['PAoff'][0]  # I don't think this is necessary
+        na_err = phot_results['PAofferr'][0]  # bc Rob's data is already rotated
 
     seps = []
     errs = []
@@ -936,29 +1055,44 @@ def calcBinDist(phot_results):
     for i in range(len(pos)-1):
         x, y = pos[i]
         x1, y1 = pos[i+1]
+
         s = calcDistance(x, y, x1, y1)
-        sep = (s*pixel_scale*u.arcsec).to(u.mas)
         phi = angle_between((x, y), (x1, y1))
-        PA = phi  # +na_offset
+
+        if scale == 'y':
+            sep = (s*pixel_scale*u.arcsec).to(u.mas)
+            PA = phi  # +na_offset
+        else:
+            sep = s
+            PA = phi
 
         dx, dy = unc[i]
         dx1, dy1 = unc[i+1]
         ds = calcDistance(dx, dy, dx1, dy1)
         # propagate err in quadrature
-        ds2 = ((ds/s)**2)+((pixel_err*u.mas/(pixel_scale*u.arcsec).to(u.mas))**2)
+        if scale == 'y':
+            ds2 = ((ds/s)**2)+((pixel_err*u.mas/(pixel_scale*u.arcsec).to(u.mas))**2)
+        else:
+            ds2 = (ds/s)**2
+
         ds_tot = np.sqrt(ds2)*sep
 
         dphi_max = angle_between((x-dx, y-dy), (x1+dx1, y1+dy1))
         dphi_min = angle_between((x+dx, y+dy), (x1-dx1, y1-dy1))
 
         dPA = dphi_max - dphi_min
-        # propagate err in quadrature
-        dPA = np.sqrt(na_err**2 + dPA**2)
+        if scale == 'y':
+            # propagate PA err in quadrature
+            dPA = np.sqrt(na_err**2 + dPA**2)
         print('')
         print(sep, '+/-', ds_tot)
         print(PA, '+/-', dPA)
-        seps.append(sep.value)
-        errs.append(ds_tot.value)
+        if scale == 'y':
+            seps.append(sep.value)
+            errs.append(ds_tot.value)
+        else:
+            seps.append(sep)
+            errs.append(ds_tot)
         PAs.append(PA)
         dPAs.append(dPA)
     result = np.asarray([seps[0], errs[0], PAs[0], dPAs[0]])

@@ -12,6 +12,7 @@
 # https://pyklip.readthedocs.io/en/latest/bka.html
 
 # import statements
+import os
 import glob
 import warnings
 import numpy as np
@@ -34,7 +35,7 @@ class forwardModel():
     '''
 
     def __init__(self, filepaths, output, prefix, KLmode, sep, pa, contrast,
-                 annulus1, annulus2, move, scale, PSFpath=None, FWHM=None):
+                 annuli, move, scale, PSFpath=None, FWHM=None, cores=1):
         if __name__ == '__main__':  # An important precaution for Windows
             __spec__ = None  # Important for ipynb compatibility
             # all the stuff goes here
@@ -52,12 +53,15 @@ class forwardModel():
         self.filelist = glob.glob(filepaths)
         self.dataset = MagAO.MagAOData(self.filelist)
         self.head = fits.getheader(self.filelist[0])
-        self.output = output
         self.pre = prefix
-        annulus = [int(annulus1), int(annulus2)]
+        try:
+            a = len(annuli)
+            self.annulus_bounds = [annuli]  # annulus centered on the planet
+        except TypeError:
+            self.annulus_bounds = annuli
         self.move = move
         self.fwhm = FWHM
-
+        self.cores = cores
         self.PSFpath = PSFpath
 
         # setup FM guesses
@@ -73,7 +77,6 @@ class forwardModel():
         # PSF subtraction parameters
         self.outputdir = output  # where to write the output files
         self.prefix = prefix  # fileprefix for the output files
-        self.annulus_bounds = [annulus]  # annulus centered on the planet
         self.subsections = 1  # we are not breaking up the annulus
         self.padding = 0  # we are not padding our zones
         self.movement = move
@@ -86,6 +89,13 @@ class forwardModel():
         and then initializing the pyklip fm_class object which is required
         to forward model through KLIP (via the run_KLIP method)
         '''
+        # make sure the outputdir exists and if not create it
+        try:
+            root = os.getcwd()
+            os.makedirs(root+'\\'+self.outputdir)
+            print('saving files to: .\\'+self.outputdir)
+        except OSError:
+            print('saving files to: .\\'+self.outputdir)
         self.construct_inst_PSF()  # sets self.psf2 == instrumental psf
         if self.fwhm is None:
             print('instrumental PSF FWHM is: '+str(self.head["0PCTFWHM"]))
@@ -112,7 +122,8 @@ class forwardModel():
                         outputdir=self.outputdir, fileprefix=self.prefix,
                         numbasis=self.numbasis, annuli=self.annulus_bounds,
                         subsections=self.subsections, padding=self.padding,
-                        movement=self.movement)
+                        movement=self.movement, numthreads=self.cores,
+                        highpass=True)
         print('Done constructing forward model! You are ready to MCMC.')
 
     def construct_inst_PSF(self):

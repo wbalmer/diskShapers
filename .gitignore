@@ -3,6 +3,7 @@
 *.fit
 *fit.gz
 *.tar
+bka-chain.pkl
 __pycache__
 .ipynb_checkpoints
 *.png

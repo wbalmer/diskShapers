@@ -35,7 +35,8 @@ class forwardModel():
     '''
 
     def __init__(self, filepaths, output, prefix, KLmode, sep, pa, contrast,
-                 annuli, move, scale, PSFpath=None, FWHM=None, cores=1):
+                 annuli, move, scale, PSFpath=None, FWHM=None, cores=1,
+                 highpass=True):
         if __name__ == '__main__':  # An important precaution for Windows
             __spec__ = None  # Important for ipynb compatibility
             # all the stuff goes here
@@ -45,7 +46,6 @@ class forwardModel():
             if cubepath == 'Gaussian':
                 PSFpath = 'doGaussian'
             else:
-                Ghost.ghostIsolation(cubepath, 380, 220, 10, 10, 10)
                 PSFpath = 'ghost.fits'
 
         # set paths to sliced dataset, call dataset into KLIP format
@@ -80,6 +80,7 @@ class forwardModel():
         self.subsections = 1  # we are not breaking up the annulus
         self.padding = 0  # we are not padding our zones
         self.movement = move
+        self.hpf = highpass
 
         print('Parameters set, ready to begin forward modeling... ')
 
@@ -123,7 +124,7 @@ class forwardModel():
                         numbasis=self.numbasis, annuli=self.annulus_bounds,
                         subsections=self.subsections, padding=self.padding,
                         movement=self.movement, numthreads=self.cores,
-                        highpass=True)
+                        highpass=self.hpf)
         print('Done constructing forward model! You are ready to MCMC.')
 
     def construct_inst_PSF(self):
@@ -139,6 +140,15 @@ class forwardModel():
                 fwhm = self.fwhm
             gauss = Gaussian(31, fwhm)
             psf = gauss.g
+        elif self.PSFpath == 'ghost.fits':
+            ghosts = np.zeros((len(self.filelist), 50, 50))
+            for i in range(len(self.filelist)):
+                ghost_i = fits.getdata(self.filelist[i])
+                ghost_i = ghost_i[217-25:217+25, 383-25:383+25]
+                ghosts[i] = ghost_i
+            psf = np.nanmedian(ghosts, axis=0)
+            fits.writeto(self.outputdir+'\\ghost.fits', psf, overwrite=True)
+
         else:
             psf = fits.getdata(self.PSFpath)
         # shape instrumental psf how pyklipFM wants

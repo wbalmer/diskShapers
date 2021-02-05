@@ -545,7 +545,8 @@ def filelister(filelist, day, band, targ, datedict, wavedict, objdict):
     return thelist
 
 
-def sortData(datadir, filesdeep='*\\', instrument='CLIO2', filesufx='*.fit*', returntab=False):
+def sortData(datadir, filesdeep='*\\', instrument='CLIO2', filesufx='*.fit*',
+             returntab=False):
     '''
     Sorts through a data directory filled with Clio data, sorts it by epoch,
     target, and passband and returns lists of sorted data, as well as a list of
@@ -558,7 +559,7 @@ def sortData(datadir, filesdeep='*\\', instrument='CLIO2', filesufx='*.fit*', re
     bands = []
     days = []
     uniques = []
-    darks = []
+    dark_images = []
     ao_on_images = []
 
     wavedict = {}
@@ -567,10 +568,11 @@ def sortData(datadir, filesdeep='*\\', instrument='CLIO2', filesufx='*.fit*', re
 
     images = glob.glob(datadir+'\\'+filesdeep+filesufx)
 
-    if images is []:
+    if images is []:  # need to update this
         raise FileNotFoundError("Empty data directory!")
 
-    for im in images:
+    print('sorting individual images')
+    for im in tqdm.tqdm(images):
         hdr = fits.getheader(im)
         if instrument == 'CLIO2':
             name = hdr['CID']
@@ -579,7 +581,7 @@ def sortData(datadir, filesdeep='*\\', instrument='CLIO2', filesufx='*.fit*', re
             day = date.split('T')[0]
             unique = day+'&'+passband+'&'+name
             if passband == 'Blocked':  # if passband is 'blocked' then it is a dark
-                darks.append(im)
+                dark_images.append(im)
             elif hdr['LOOP'] == 1:  # ensure AO is on for images used
                 ao_on_images.append(im)
 
@@ -591,8 +593,26 @@ def sortData(datadir, filesdeep='*\\', instrument='CLIO2', filesufx='*.fit*', re
             unique = day+'&'+passband+'&'+name
             # currently using all NIRC2 images, so no need to filter for AO
             ao_on_images.append(im)
+        elif instrument == 'VisAO':
+            imtyp = hdr['VIMTYPE']
+            name = hdr['OBJECT']
+            if hdr['VFW1POS'] == 0.0:
+                if hdr['VFW2POS'] == 0.0:
+                    passband = hdr['VFW3POSN'].replace(' ','-')
+                else:
+                    passband = hdr['VFW2POSN'].replace('\'', 'prime')
+            else:
+                passband = hdr['VFW1POSN']
+            date = hdr['DATE-OBS']
+            day = date.split('T')[0]
+            unique = day+'&'+passband+'&'+name
+            if imtyp == 'DARK':
+                dark_images.append(im)
+            elif imtyp == 'SCIENCE':
+                if hdr['AOLOOPST'] == 'CLOSED':
+                    ao_on_images.append(im)
         else:
-            raise ValueError('the currently supported instruments are NIRC2 and CLIO2')
+            raise ValueError('the currently supported instruments are: NIRC2, CLIO2, VisAO')
 
         if name not in names:
             names.append(name)
@@ -607,14 +627,20 @@ def sortData(datadir, filesdeep='*\\', instrument='CLIO2', filesufx='*.fit*', re
         datedict.update({im: day})
 
     datasets = []
-    for unique in uniques:
+    darks = []
+    print('sorting unique datasets into lists')
+    for unique in tqdm.tqdm(uniques):
         day, band, name = unique.split('&')
-        liste = filelister(ao_on_images, day, band, name, datedict=datedict,
-                           wavedict=wavedict, objdict=objdict)
-        datasets.append(liste)
+        scilist = filelister(ao_on_images, day, band, name, datedict=datedict,
+                             wavedict=wavedict, objdict=objdict)
+        datasets.append(scilist)
+        darklist = filelister(dark_images, day, band, name, datedict=datedict,
+                              wavedict=wavedict, objdict=objdict)
+
+        darks.append(darklist)
 
     if returntab is True:
-        return uniques
+        return uniques, datasets, darks
     elif instrument == 'NIRC2':
         return datasets
     else:
@@ -682,7 +708,7 @@ def ClioLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
     # read in img header
     head = fits.getheader(imagepath)
 
-    epsf = nircEPSF(imagepath, epsfsize=epsfstamp)
+    epsf = nircEPSF(imagepath, epsfsize=epsfstamp, bright=bright)
 
     print('Select your target system to fit positions to')
     targx, targy, fwhm = findFirst(imagepath, thresh=thresh,

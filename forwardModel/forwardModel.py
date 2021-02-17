@@ -36,7 +36,7 @@ class forwardModel():
 
     def __init__(self, filepaths, output, prefix, KLmode, sep, pa, contrast,
                  annuli, move, scale, PSFpath=None, FWHM=None, cores=1,
-                 highpass=True):
+                 highpass=True, **kwargs):
         if __name__ == '__main__':  # An important precaution for Windows
             __spec__ = None  # Important for ipynb compatibility
             # all the stuff goes here
@@ -65,7 +65,10 @@ class forwardModel():
         self.PSFpath = PSFpath
 
         # setup FM guesses
-        self.numbasis = np.array([KLmode])  # KL basis cutoffs you want
+        if 'numbasis' in kwargs:
+            self.numbasis = np.array([kwargs['numbasis']])  # KL basis cutoffs you want
+        else:
+            self.numbasis = np.array([KLmode])
         self.guesssep = sep  # estimate of separation in pixels
         self.guesspa = pa  # estimate of position angle, in degrees
         self.guessflux = contrast  # estimated contrast

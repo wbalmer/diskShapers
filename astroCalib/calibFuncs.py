@@ -2,6 +2,7 @@
 import os
 import glob
 import tqdm
+from tqdm.notebook import tqdm_notebook, trange
 import datetime
 import numpy as np
 import scipy.signal
@@ -11,7 +12,7 @@ from scipy.ndimage.interpolation import shift
 from astropy.io import fits
 import warnings
 from photutils import CircularAperture, IRAFStarFinder
-from astropy.visualization import LogStretch
+from astropy.visualization import LogStretch, AsinhStretch
 from astropy.visualization.mpl_normalize import ImageNormalize
 import matplotlib.pyplot as plt
 from astropy.nddata import NDData
@@ -23,7 +24,8 @@ from photutils.psf import IterativelySubtractedPSFPhotometry, FittableImageModel
 from photutils import MMMBackground
 from photutils.psf import IntegratedGaussianPRF, DAOGroup, prepare_psf_model
 from astropy.modeling.fitting import LevMarLSQFitter
-
+from astropy.stats import SigmaClip
+from photutils import Background2D, MedianBackground
 import astropy.units as u
 
 
@@ -496,9 +498,10 @@ def clioNodSub(reduced_data, savepath):
                 fits.writeto(new_str, nodsub, hdr, overwrite=True)
 
 
-def crosscube(imcube, cenx, ceny, box=50, returnmed='y', returncube='n'):
+def crosscube(imcube, cenx, ceny, box=50, returnmed=True, returncube=False):
     '''
-
+    Conducts crosscorrelation and shifts images in a cube into a common
+    position. Returns either a cube of shifted images or a median of the cube
     '''
     im1 = imcube[0]
 
@@ -506,7 +509,7 @@ def crosscube(imcube, cenx, ceny, box=50, returnmed='y', returncube='n'):
     yshifts = {}
     cube = np.zeros([imcube.shape[0], im1.shape[0], im1.shape[1]])
 
-    for index in range(imcube.shape[0]):
+    for index in trange(imcube.shape[0]):
         im = imcube[index]
         xshifts[index], yshifts[index] = cross_image(im1, im, centerx=cenx,
                                                      centery=ceny, boxsize=box)
@@ -519,14 +522,17 @@ def crosscube(imcube, cenx, ceny, box=50, returnmed='y', returncube='n'):
 
     print('Max x-shift={0}, max y-shift={1} (pixels)'.format(max_x_shift,
                                                              max_y_shift))
-    median_image = np.nanmedian(cube, axis=0)
 
-    print('\n Done stacking!')
-    if returnmed == 'y' and returncube != 'y':
+    if returnmed is True and returncube is False:
+        median_image = np.nanmedian(cube, axis=0)
+        print('\n Done stacking!')
         return median_image
-    elif returnmed != 'y' and returncube == 'y':
+    elif returnmed is False and returncube is True:
+        print('\n Done stacking!')
         return cube
-    elif returnmed == 'y' and returncube == 'y':
+    elif returnmed is True and returncube is True:
+        print('\n Done stacking!')
+        median_image = np.nanmedian(cube, axis=0)
         return median_image, cube
 
 
@@ -611,6 +617,8 @@ def sortData(datadir, filesdeep='*\\', instrument='CLIO2', filesufx='*.fit*',
             elif imtyp == 'SCIENCE':
                 if hdr['AOLOOPST'] == 'CLOSED':
                     ao_on_images.append(im)
+                elif hdr['AOLOOPST'] == 'NOT PROCESSED':
+                    ao_on_images.append(im)  # the only unprocessed imgs in our data are coincidentally ao-on
         else:
             raise ValueError('the currently supported instruments are: NIRC2, CLIO2, VisAO')
 
@@ -708,11 +716,12 @@ def ClioLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
     # read in img header
     head = fits.getheader(imagepath)
 
-    epsf = nircEPSF(imagepath, epsfsize=epsfstamp, bright=bright)
+    epsf = nircEPSF(imagepath, epsfsize=epsfstamp, thresh=thresh, bright=bright)
 
     print('Select your target system to fit positions to')
     targx, targy, fwhm = findFirst(imagepath, thresh=thresh,
-                                   fwhmguess=fwhmguess, bright=bright)
+                                   fwhmguess=fwhmguess, bright=bright,
+                                   roundness=roundness)
 
     if stampsize is None:
         stampsize = int(input('input the size of stamp: '))
@@ -770,6 +779,132 @@ def ClioLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
 
     if plot is True:
         norm = ImageNormalize(stretch=LogStretch())
+        plt.figure(figsize=(9, 9))
+        plt.subplot(1, 2, 1)
+        plt.imshow(stamp, origin='lower', norm=norm)
+        apertures.plot(color='red', lw=1.5, alpha=0.7)
+        plt.colorbar(orientation='horizontal')
+
+        plt.subplot(1, 2, 2)
+        plt.imshow(phot_obj.get_residual_image(), cmap='viridis', norm=norm,
+                   origin='lower', interpolation='nearest', aspect=1)
+        apertures.plot(color='red', lw=1.5, alpha=0.7)
+        plt.colorbar(orientation='horizontal')
+
+    result = calcBinDist(phot_results, scale='n')
+
+    return result
+
+
+def VisAOLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
+               epsfstamp=None, plot=True, roundness=0.5, crit_sep=15,
+               iterations=1, setfwhm=False, **kwargs):
+    '''
+    VisAOLocate
+    ---------
+    User selects reference psf source, then target source from image
+    which is called via fits.getdata from imagepath. Returns the iterative
+    photometry result ran on the target, which yields accurate position
+
+    Modification History:
+    Initialized by William Balmer 10/30/2020
+
+    inputs
+    ------------
+    imagepath           : (string) path to fits image
+    thresh              : (float) threshold parameter for IRAFStarFinder
+    fwhmguess           : (float) fwhm parameter for IRAFStarFinder
+    bright              : (int) number of found stars to display
+    stampsize           : (optional, int, default=None) size of subregion of image to analyse
+    plot                : (optional, bool, default=True) plot results or not
+    roundness           : (optional, float, default=0.5) roundlo, roundhi parameter for IRAFStarFinder
+    crit_sep            : (optional, float, default=15)
+    iterations          : (optional, int, default=1) iterations for IterativelySubtractedPSFPhotometry
+    setfwhm             : (optional, bool, default=False) use fwhmguess as fwhm
+
+    outputs
+    ------------
+    phot_results        : (astropy.table object)
+    '''
+    # read in data
+    data = fits.getdata(imagepath)
+    # read in img header
+    head = fits.getheader(imagepath)
+
+    epsf = nircEPSF(imagepath, epsfsize=epsfstamp, thresh=thresh, bright=bright)
+
+    print('Select your target system to fit positions to')
+    targx, targy, fwhm = findFirst(imagepath, thresh=thresh,
+                                   fwhmguess=fwhmguess, bright=bright,
+                                   roundness=roundness)
+
+    if stampsize is None:
+        stampsize = int(input('input the size of stamp: '))
+    elif stampsize is not int:
+        stampsize = int(stampsize)
+
+    x0 = int(targx-(stampsize/2))
+    x1 = int(targx+(stampsize/2))
+    y0 = int(targy-(stampsize/2))
+    y1 = int(targy+(stampsize/2))
+    stamp = data[y0:y1, x0:x1]
+
+    if 'background_sloped' in kwargs:
+        # background model
+        sigma_clip = SigmaClip(sigma=3.)
+        bkg_estimator = MedianBackground()
+        bkg = Background2D(stamp, (kwargs['background_sloped'][0],
+                                   kwargs['background_sloped'][0]),
+                           filter_size=(kwargs['background_sloped'][1],
+                                        kwargs['background_sloped'][1]),
+                           sigma_clip=sigma_clip, bkg_estimator=bkg_estimator)
+        stamp -= bkg.background
+
+    try:
+        daogroup = DAOGroup(crit_separation=crit_sep)
+        mmm_bkg = MMMBackground()
+        if setfwhm is True:
+            fwhm = fwhmguess
+        finder = IRAFStarFinder(thresh, fwhm, roundlo=-roundness,
+                                roundhi=roundness, sigma_radius=3)
+        fitter = LevMarLSQFitter()
+        phot_obj = IterativelySubtractedPSFPhotometry(finder=finder,
+                                                      group_maker=daogroup,
+                                                      bkg_estimator=mmm_bkg,
+                                                      psf_model=epsf,
+                                                      fitter=fitter,
+                                                      fitshape=int(stampsize/2),
+                                                      niters=iterations,
+                                                      aperture_radius=7)
+        phot_results = phot_obj(stamp)
+        print('Stars found at positions')
+        print(phot_results['x_0', 'y_0'][0])
+        print(phot_results['x_0', 'y_0'][1])
+
+    except IndexError:  # this happens when the threshold is too high
+        newthresh = int(input('found fewer than 2 stars! re-enter threshold? >'))
+        newfinder = IRAFStarFinder(newthresh, fwhm, roundlo=-roundness,
+                                roundhi=roundness, sigma_radius=3)
+        fitter = LevMarLSQFitter()
+        phot_obj = IterativelySubtractedPSFPhotometry(finder=newfinder,
+                                                      group_maker=daogroup,
+                                                      bkg_estimator=mmm_bkg,
+                                                      psf_model=epsf,
+                                                      fitter=fitter,
+                                                      fitshape=int(stampsize/2),
+                                                      niters=iterations,
+                                                      aperture_radius=7)
+        phot_results = phot_obj(stamp)
+        print('Stars found at positions')
+        print(phot_results['x_0', 'y_0'][0])
+        print(phot_results['x_0', 'y_0'][1])
+
+    pos = phot_results['x_0', 'y_0']
+    positions = np.transpose((pos['x_0'], pos['y_0']))
+    apertures = CircularAperture(positions, r=fwhm)
+
+    if plot is True:
+        norm = ImageNormalize(stretch=AsinhStretch())
         plt.figure(figsize=(9, 9))
         plt.subplot(1, 2, 1)
         plt.imshow(stamp, origin='lower', norm=norm)
@@ -922,7 +1057,7 @@ def NIRCLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
     return result
 
 
-def findFirst(imagepath, thresh=100, fwhmguess=5, bright=5):
+def findFirst(imagepath, thresh=100, fwhmguess=5, bright=5, roundness=0.3):
     '''
     findFirst
     ---------
@@ -949,7 +1084,8 @@ def findFirst(imagepath, thresh=100, fwhmguess=5, bright=5):
     '''
     # plot results of quick starfinder to grab rough pos of target
     firstim = fits.getdata(imagepath)
-    firstSF = IRAFStarFinder(thresh, fwhmguess, brightest=bright)
+    firstSF = IRAFStarFinder(thresh, fwhmguess, brightest=bright,
+                             roundlo=-roundness, roundhi=roundness)
     table1 = firstSF.find_stars(firstim)
 
     norm = ImageNormalize(stretch=LogStretch())

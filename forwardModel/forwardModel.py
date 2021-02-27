@@ -22,7 +22,7 @@ import pyklip.instruments.MagAO as MagAO
 import pyklip.fmlib.fmpsf as fmpsf
 import pyklip.fm as fm
 
-import GhostIsolation as Ghost
+import GhostIsolation as ghost
 from gaussian import Gaussian
 
 warnings.filterwarnings('ignore')
@@ -35,22 +35,23 @@ class forwardModel():
     '''
 
     def __init__(self, filepaths, output, prefix, KLmode, sep, pa, contrast,
-                 annuli, move, scale, PSFpath=None, FWHM=None, cores=1,
+                 annuli, move, scale, ePSF=None, FWHM=None, cores=1,
                  highpass=True, **kwargs):
         if __name__ == '__main__':  # An important precaution for Windows
             __spec__ = None  # Important for ipynb compatibility
             # all the stuff goes here
-        if PSFpath is None:
+        if ePSF is None:
             print('You have not provided a path to your instrumental psf')
             cubepath = input('Enter the path to your MagAO image cube to generate one, or enter \'Gaussian\' to use a simple gaussian psf: ')
             if cubepath == 'Gaussian':
-                PSFpath = 'doGaussian'
+                ePSF = 'doGaussian'
             else:
-                PSFpath = 'ghost.fits'
+                ePSF = 'ghost.fits'
 
         # set paths to sliced dataset, call dataset into KLIP format
         # set up variables needed for KLIP calls
-        self.filelist = glob.glob(filepaths)
+        self.filepaths = filepaths
+        self.filelist = glob.glob(self.filepaths)
         self.dataset = MagAO.MagAOData(self.filelist)
         self.head = fits.getheader(self.filelist[0])
         self.pre = prefix
@@ -62,7 +63,7 @@ class forwardModel():
         self.move = move
         self.fwhm = FWHM
         self.cores = cores
-        self.PSFpath = PSFpath
+        self.ePSF = ePSF
 
         # setup FM guesses
         if 'numbasis' in kwargs:
@@ -136,24 +137,21 @@ class forwardModel():
         from an instrumental ghost or a gaussian. FWHM of gaussian can be
         input or taken from header of files in filelist
         '''
-        if self.PSFpath == 'doGaussian':
-            if self.fwhm is None:
-                fwhm = self.head["0PCTFWHM"]
-            else:
-                fwhm = self.fwhm
+        if self.fwhm is None:
+            fwhm = self.head["0PCTFWHM"]
+        else:
+            fwhm = self.fwhm
+        if self.ePSF == 'doGaussian':
             gauss = Gaussian(31, fwhm)
             psf = gauss.g
-        elif self.PSFpath == 'ghost.fits':
-            ghosts = np.zeros((len(self.filelist), 50, 50))
-            for i in range(len(self.filelist)):
-                ghost_i = fits.getdata(self.filelist[i])
-                ghost_i = ghost_i[217-25:217+25, 383-25:383+25]
-                ghosts[i] = ghost_i
-            psf = np.nanmedian(ghosts, axis=0)
-            fits.writeto(self.outputdir+'\\ghost.fits', psf, overwrite=True)
-
+        elif self.ePSF == 'doMoffat':
+            ghostdata, moffat = ghost.ghostIsolation(self.filepaths, 380, 220, 10, fwhm, 1)
+            psf = moffat
+        elif self.ePSF == 'doGhost':
+            ghostdata, moffat = ghost.ghostIsolation(self.filepaths, 380, 220, 10, fwhm, 1)
+            psf = ghostdata
         else:
-            psf = fits.getdata(self.PSFpath)
+            psf = fits.getdata(self.ePSF)
         # shape instrumental psf how pyklipFM wants
         psf2 = np.zeros((1, psf.shape[0], psf.shape[1]))
         psf2[0] = psf

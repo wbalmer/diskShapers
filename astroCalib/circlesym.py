@@ -13,7 +13,7 @@ import scipy.ndimage.interpolation as sci
 # edited by William Balmer Feb 2021
 
 
-def circlesym(datadir, filname, output, method='median', box=451, **kwargs):
+def circlesym(datadir, filname, output, method='median', box=451, data=None, save=True, **kwargs):
     '''
     finds center of circular symmetry of median combinations of registered images, and shifts this center to the center of the image cube
 
@@ -32,8 +32,12 @@ def circlesym(datadir, filname, output, method='median', box=451, **kwargs):
 
     '''
     print('running circular symmetry on: ', filname)
-    Data = fits.getdata(datadir + filname)
-    hdr = fits.getheader(datadir + filname)
+    if data is not None:
+        Data = data
+        hdr = fits.getheader(datadir + filname)
+    else:
+        Data = fits.getdata(datadir + filname)
+        hdr = fits.getheader(datadir + filname)
 
     if len(Data.shape) > 2:
         segm = detect_sources(Data[3,:,:], 10, npixels=35)
@@ -65,7 +69,7 @@ def circlesym(datadir, filname, output, method='median', box=451, **kwargs):
     if 'center_only' in kwargs:
         centerrad = kwargs['center_only']
         box_size = int(centerrad)
-        radius_size = int(box_size // 2)
+        radius_size = int(50)
         cenx, ceny = int(Datamed.shape[1] /2), int(Datamed.shape[0]/2)
         Data_circsym = Data[:, ceny-radius_size:ceny+radius_size, cenx-radius_size:cenx+radius_size]
 
@@ -159,15 +163,17 @@ def circlesym(datadir, filname, output, method='median', box=451, **kwargs):
     else:
         Data_cent = sci.shift(Data,(Data_yc_shift[0], Data_xc_shift[0]))
 
-    print(f'writing centered image cube: {output}')
-
-    hdr.append(('COMMENT', f'aligned with method: {method} using mask:{mask_choice}'), end=True)
-    fits.writeto(output, Data_cent, header=hdr, overwrite=True )
     print()
     print('----------- o -------------')
     print()
 
-    return Data_cent
+    if save is True:
+        print(f'writing centered image cube: {output}')
+        hdr.append(('COMMENT', f'aligned with method: {method} using mask:{mask_choice}'), end=True)
+        fits.writeto(output, Data_cent, header=hdr, overwrite=True )
+        return
+    else:
+        return Data_cent
 
 def center_circlesym(im, xr, yr, rmax, mask=None):
     '''Finds the center of a star image assuming circular symmetry

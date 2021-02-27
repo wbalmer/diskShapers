@@ -234,6 +234,8 @@ def centroid(data_arr, xcen, ycen, nhalf=5, derivshift=1.):
 
     ycenf = ycen - dy
 
+    print(xcenf, ycenf)
+
     # not sure if this will work with the crossimage except statement...
     if xcenf or ycenf is np.nan:
         raise ValueError
@@ -1057,7 +1059,7 @@ def NIRCLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
     return result
 
 
-def findFirst(imagepath, thresh=100, fwhmguess=5, bright=5, roundness=0.3):
+def findFirst(imagepath, thresh=100, fwhmguess=5, bright=5, roundness=0.3, data=None):
     '''
     findFirst
     ---------
@@ -1082,8 +1084,12 @@ def findFirst(imagepath, thresh=100, fwhmguess=5, bright=5, roundness=0.3):
     targy               : (int) y centroid ''
     fwhm                : (float) fwhm of target star
     '''
-    # plot results of quick starfinder to grab rough pos of target
-    firstim = fits.getdata(imagepath)
+    if data is None:
+        # plot results of quick starfinder to grab rough pos of target
+        firstim = fits.getdata(imagepath)
+    else:
+        firstim = data
+
     firstSF = IRAFStarFinder(thresh, fwhmguess, brightest=bright,
                              roundlo=-roundness, roundhi=roundness)
     table1 = firstSF.find_stars(firstim)

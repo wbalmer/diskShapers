@@ -234,11 +234,11 @@ def centroid(data_arr, xcen, ycen, nhalf=5, derivshift=1.):
 
     ycenf = ycen - dy
 
-    print(xcenf, ycenf)
+    #print(xcenf, ycenf)
 
     # not sure if this will work with the crossimage except statement...
-    if xcenf or ycenf is np.nan:
-        raise ValueError
+    #if xcenf or ycenf is np.nan:
+    #    raise ValueError
 
     return xcenf, ycenf
 
@@ -906,10 +906,12 @@ def VisAOLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
     apertures = CircularAperture(positions, r=fwhm)
 
     if plot is True:
+        from skimage import restoration
+        deconvolved_stamp = restoration.richardson_lucy(stamp, epsf.normalized_data(), iterations=5)
         norm = ImageNormalize(stretch=AsinhStretch())
         plt.figure(figsize=(9, 9))
         plt.subplot(1, 2, 1)
-        plt.imshow(stamp, origin='lower', norm=norm)
+        plt.imshow(deconvolved_stamp, origin='lower', norm=norm)
         apertures.plot(color='red', lw=1.5, alpha=0.7)
         plt.colorbar(orientation='horizontal')
 

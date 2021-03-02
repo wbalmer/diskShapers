@@ -40,7 +40,7 @@ def circlesym(datadir, filname, output, method='median', box=451, data=None, sav
         hdr = fits.getheader(datadir + filname)
 
     if len(Data.shape) > 2:
-        segm = detect_sources(Data[3,:,:], 10, npixels=35)
+        segm = detect_sources(Data[3,:,:], 100, npixels=35)
         cat = source_properties(Data[3,:,:], segm)
     else:
         segm = detect_sources(Data, 10, npixels=35)

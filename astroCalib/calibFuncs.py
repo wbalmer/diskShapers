@@ -20,13 +20,15 @@ from photutils.psf import extract_stars
 from astropy.table import Table
 from photutils import EPSFBuilder
 from astropy.modeling.functional_models import Moffat2D, AiryDisk2D
-from photutils.psf import IterativelySubtractedPSFPhotometry, FittableImageModel#
+from photutils.psf import IterativelySubtractedPSFPhotometry, FittableImageModel
 from photutils import MMMBackground
-from photutils.psf import IntegratedGaussianPRF, DAOGroup, prepare_psf_model
+from photutils.psf import IntegratedGaussianPRF, DAOGroup
 from astropy.modeling.fitting import LevMarLSQFitter
 from astropy.stats import SigmaClip
 from photutils import Background2D, MedianBackground
 import astropy.units as u
+import numpy.fft as fft
+import scipy.interpolate as sinterp
 
 
 # functions
@@ -354,6 +356,144 @@ def shift_image(image, xshift, yshift):
 
     '''
     return shift(image, (xshift, yshift))
+
+
+def high_pass_filter(img, filtersize=10):
+    """
+    A FFT implmentation of high pass filter.
+
+    Args:
+        img: a 2D image
+        filtersize: size in Fourier space of the size of the space. In image space, size=img_size/filtersize
+
+    Returns:
+        filtered: the filtered image
+    """
+    # mask NaNs if there are any
+    nan_index = np.where(np.isnan(img))
+    if np.size(nan_index) > 0:
+        good_index = np.where(~np.isnan(img))
+        y, x = np.indices(img.shape)
+        good_coords = np.array([x[good_index], y[good_index]]).T # shape of Npix, ndimage
+        nan_fixer = sinterp.NearestNDInterpolator(good_coords, img[good_index])
+        fixed_dat = nan_fixer(x[nan_index], y[nan_index])
+        img[nan_index] = fixed_dat
+
+    transform = fft.fft2(img)
+
+    # coordinate system in FFT image
+    u,v = np.meshgrid(fft.fftfreq(transform.shape[1]), fft.fftfreq(transform.shape[0]))
+    # scale u,v so it has units of pixels in FFT space
+    rho = np.sqrt((u*transform.shape[1])**2 + (v*transform.shape[0])**2)
+    # scale rho up so that it has units of pixels in FFT space
+    # rho *= transform.shape[0]
+    # create the filter
+    filt = 1. - np.exp(-(rho**2/filtersize**2))
+
+    filtered = np.real(fft.ifft2(transform*filt))
+
+    # restore NaNs
+    filtered[nan_index] = np.nan
+    img[nan_index] = np.nan
+
+    return filtered
+
+
+def nan_map_coordinates_2d(img, yp, xp, mc_kwargs=None):
+    """
+    scipy.ndimage.map_coordinates() that handles nans for 2-D transformations. Only works in 2-D!
+
+    Do NaN detection by defining any pixel in the new coordiante system (xp, yp) as a nan
+    If any one of the neighboring pixels in the original image is a nan (e.g. (xp, yp) =
+    (120.1, 200.1) is nan if either (120, 200), (121, 200), (120, 201), (121, 201) is a nan)
+
+    Args:
+        img (np.array): 2-D image that is looking to be transformed
+        yp (np.array): 2-D array of y-coordinates that the image is evaluated out
+        xp (np.array): 2-D array of x-coordinates that the image is evaluated out
+        mc_kwargs (dict): other parameters to pass into the map_coordinates function.
+
+    Returns:
+        transformed_img (np.array): 2-D transformed image. Each pixel is evaluated at the (yp, xp) specified by xp and yp.
+    """
+    # check if optional parameters are passed in
+    if mc_kwargs is None:
+        mc_kwargs = {}
+    # if nothing specified, we will pad transformations with np.nan
+    if "cval" not in mc_kwargs:
+        mc_kwargs["cval"] = np.nan
+
+    # check all four pixels around each pixel and see whether they are nans
+    xp_floor = np.clip(np.floor(xp).astype(int), 0, img.shape[1]-1)
+    xp_ceil = np.clip(np.ceil(xp).astype(int), 0, img.shape[1]-1)
+    yp_floor = np.clip(np.floor(yp).astype(int), 0, img.shape[0]-1)
+    yp_ceil = np.clip(np.ceil(yp).astype(int), 0, img.shape[0]-1)
+    rotnans = np.where(np.isnan(img[yp_floor.ravel(), xp_floor.ravel()]) |
+                       np.isnan(img[yp_floor.ravel(), xp_ceil.ravel()]) |
+                       np.isnan(img[yp_ceil.ravel(), xp_floor.ravel()]) |
+                       np.isnan(img[yp_ceil.ravel(), xp_ceil.ravel()]))
+
+    # resample image based on new coordinates, set nan values as median
+    nanpix = np.where(np.isnan(img))
+    medval = np.nanmedian(img)
+    img_copy = np.copy(img)
+    img_copy[nanpix] = medval
+    transformed_img = ndimage.map_coordinates(img_copy, [yp, xp], **mc_kwargs)
+    transformed_img = transformed_img.astype('float32')
+
+    # mask nans
+    img_shape = transformed_img.shape
+    transformed_img.shape = [img_shape[0] * img_shape[1]]
+    transformed_img[rotnans] = np.nan
+    transformed_img.shape = img_shape
+
+    return transformed_img
+
+
+def rotate(img, angle, center, new_center=None, flipx=False):
+    """
+    Rotate an image by the given angle about the given center.
+    Optional: can shift the image to a new image center after rotation. Also can reverse x axis for those left
+              handed astronomy coordinate systems
+
+    Args:
+        img: a 2D image
+        angle: angle CCW to rotate by (degrees)
+        center: 2 element list [x,y] that defines the center to rotate the image to respect to
+        new_center: 2 element list [x,y] that defines the new image center after rotation
+        flipx: reverses x axis after rotation
+    Returns:
+        resampled_img: new 2D image
+    """
+    # skip this step if img is all nans
+    if np.size(np.where(~np.isnan(img))) == 0:
+        return np.copy(img)
+
+    #convert angle to radians
+    angle_rad = np.radians(angle)
+
+    #create the coordinate system of the image to manipulate for the transform
+    dims = img.shape
+    x, y = np.meshgrid(np.arange(dims[1], dtype=np.float32), np.arange(dims[0], dtype=np.float32))
+
+    #if necessary, move coordinates to new center
+    if new_center is not None:
+        dx = new_center[0] - center[0]
+        dy = new_center[1] - center[1]
+        x -= dx
+        y -= dy
+
+    #flip x if needed to get East left of North
+    if flipx is True:
+        x = center[0] - (x - center[0])
+
+    #do rotation. CW rotation formula to get a CCW of the image
+    xp = (x-center[0])*np.cos(angle_rad) + (y-center[1])*np.sin(angle_rad) + center[0]
+    yp = -(x-center[0])*np.sin(angle_rad) + (y-center[1])*np.cos(angle_rad) + center[1]
+
+    resampled_img = nan_map_coordinates_2d(img, yp, xp)
+
+    return resampled_img
 
 
 def runClioSubtraction(imlist, badpixelmaskspath, interparea=2):
@@ -793,12 +933,12 @@ def ClioLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
         apertures.plot(color='red', lw=1.5, alpha=0.7)
         plt.colorbar(orientation='horizontal')
 
-    result = calcBinDist(phot_results, scale='n')
+    result = phot_results
 
     return result
 
 
-def VisAOLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
+def VisAOLocate(imagepath, thresh, fwhmguess, bright, data=None, stampsize=None,
                epsfstamp=None, plot=True, roundness=0.5, crit_sep=15,
                iterations=1, setfwhm=False, **kwargs):
     '''
@@ -817,6 +957,7 @@ def VisAOLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
     thresh              : (float) threshold parameter for IRAFStarFinder
     fwhmguess           : (float) fwhm parameter for IRAFStarFinder
     bright              : (int) number of found stars to display
+    data                : (optional, array-like, default=None) if you need to pass image as array rather than getting from path
     stampsize           : (optional, int, default=None) size of subregion of image to analyse
     plot                : (optional, bool, default=True) plot results or not
     roundness           : (optional, float, default=0.5) roundlo, roundhi parameter for IRAFStarFinder
@@ -829,16 +970,24 @@ def VisAOLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
     phot_results        : (astropy.table object)
     '''
     # read in data
-    data = fits.getdata(imagepath)
-    # read in img header
-    head = fits.getheader(imagepath)
+    if data is not None:
+        data = data
+        epsf = nircEPSF(imagepath, data=data, epsfsize=epsfstamp,
+                        thresh=thresh, bright=bright)
+        print('Select your target system to fit positions to')
+        targx, targy, fwhm = findFirst(imagepath, data=data, thresh=thresh,
+                                       fwhmguess=fwhmguess, bright=bright,
+                                       roundness=roundness)
+    else:
+        data = fits.getdata(imagepath)
+        epsf = nircEPSF(imagepath, epsfsize=epsfstamp, thresh=thresh, bright=bright)
+        print('Select your target system to fit positions to')
+        targx, targy, fwhm = findFirst(imagepath, thresh=thresh,
+                                       fwhmguess=fwhmguess, bright=bright,
+                                       roundness=roundness)
 
-    epsf = nircEPSF(imagepath, epsfsize=epsfstamp, thresh=thresh, bright=bright)
-
-    print('Select your target system to fit positions to')
-    targx, targy, fwhm = findFirst(imagepath, thresh=thresh,
-                                   fwhmguess=fwhmguess, bright=bright,
-                                   roundness=roundness)
+    if fwhm > 3*fwhmguess:  # solves some weirdness i was running into at one point
+        fwhm = fwhmguess
 
     if stampsize is None:
         stampsize = int(input('input the size of stamp: '))
@@ -906,12 +1055,10 @@ def VisAOLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
     apertures = CircularAperture(positions, r=fwhm)
 
     if plot is True:
-        from skimage import restoration
-        deconvolved_stamp = restoration.richardson_lucy(stamp, epsf.normalized_data(), iterations=5)
         norm = ImageNormalize(stretch=AsinhStretch())
         plt.figure(figsize=(9, 9))
         plt.subplot(1, 2, 1)
-        plt.imshow(deconvolved_stamp, origin='lower', norm=norm)
+        plt.imshow(stamp, origin='lower', norm=norm)
         apertures.plot(color='red', lw=1.5, alpha=0.7)
         plt.colorbar(orientation='horizontal')
 
@@ -921,14 +1068,14 @@ def VisAOLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
         apertures.plot(color='red', lw=1.5, alpha=0.7)
         plt.colorbar(orientation='horizontal')
 
-    result = calcBinDist(phot_results, scale='n')
+    result = phot_results
 
     return result
 
 
 def NIRCLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
                epsfstamp=None, plot=True, roundness=0.5, crit_sep=15,
-               iterations=1, setfwhm=False):
+               iterations=1, setfwhm=False, high_pass=False):
     '''
     NIRCLocate
     ---------
@@ -960,6 +1107,8 @@ def NIRCLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
     '''
     # read in data
     data = fits.getdata(imagepath)
+    if high_pass is True:
+        data = high_pass_filter(data, filtersize=(data.shape[0]/15))
     # read in img header to get pixel scale
     head = fits.getheader(imagepath)
     date = head['DATE-OBS']
@@ -976,10 +1125,10 @@ def NIRCLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
         na_offset = -0.252
         na_err = 0.009
 
-    epsf = nircEPSF(imagepath, epsfsize=epsfstamp)
+    epsf = nircEPSF(imagepath, epsfsize=epsfstamp, data=data)
 
     print('Select your target system to fit positions to')
-    targx, targy, fwhm = findFirst(imagepath, thresh=thresh,
+    targx, targy, fwhm = findFirst(imagepath, data=data, thresh=thresh,
                                    fwhmguess=fwhmguess, bright=bright)
 
     if stampsize is None:
@@ -1011,8 +1160,7 @@ def NIRCLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
                                                       aperture_radius=7)
         phot_results = phot_obj(stamp)
         print('Stars found at positions')
-        print(phot_results['x_0', 'y_0'][0])
-        print(phot_results['x_0', 'y_0'][1])
+        print(phot_results['x_0', 'y_0'])
 
     except IndexError:  # this happens when the threshold is too high
         newthresh = int(input('found fewer than 2 stars! re-enter threshold? >'))
@@ -1029,15 +1177,14 @@ def NIRCLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
                                                       aperture_radius=7)
         phot_results = phot_obj(stamp)
         print('Stars found at positions')
-        print(phot_results['x_0', 'y_0'][0])
-        print(phot_results['x_0', 'y_0'][1])
+        print(phot_results['x_0', 'y_0'])
 
     pos = phot_results['x_0', 'y_0']
     positions = np.transpose((pos['x_0'], pos['y_0']))
     apertures = CircularAperture(positions, r=fwhm)
 
     if plot is True:
-        norm = ImageNormalize(stretch=LogStretch())
+        norm = ImageNormalize(stretch=AsinhStretch())
         plt.figure(figsize=(9, 9))
         plt.subplot(1, 2, 1)
         plt.imshow(stamp, origin='lower', norm=norm)
@@ -1056,7 +1203,7 @@ def NIRCLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
     phot_results['PAofferr'] = na_err
     phot_results['date'] = date
 
-    result = calcBinDist(phot_results)
+    result = phot_results
 
     return result
 
@@ -1124,17 +1271,24 @@ def findFirst(imagepath, thresh=100, fwhmguess=5, bright=5, roundness=0.3, data=
 
 
 def nircEPSF(imgpath, epsfsize=None, thresh=100, fwhmguess=5, bright=5,
-             plot=True):
-    print('Choose a reference star image to create a reference PSF from')
-    targx, targy, fwhm = findFirst(imgpath, thresh=thresh,
-                                   fwhmguess=fwhmguess, bright=bright)
+             plot=True, data=None):
+
 
     if epsfsize is None:
         epsfsize = int(input('input the size of reference psf stamp: '))
     elif epsfsize is not int:
         epsfsize = int(epsfsize)
+    if data is not None:
+        data = data
+        print('Choose a reference star image to create a reference PSF from')
+        targx, targy, fwhm = findFirst(imgpath, data=data, thresh=thresh,
+                                       fwhmguess=fwhmguess, bright=bright)
+    else:
+        data = fits.getdata(imgpath)
+        print('Choose a reference star image to create a reference PSF from')
+        targx, targy, fwhm = findFirst(imgpath, thresh=thresh,
+                                       fwhmguess=fwhmguess, bright=bright)
 
-    data = fits.getdata(imgpath)
     x0 = int(targx-(epsfsize/2))
     x1 = int(targx+(epsfsize/2))
     y0 = int(targy-(epsfsize/2))
@@ -1182,7 +1336,7 @@ def makeEPSF(image, verb=False, plot=True):
 
     if plot is True:
         # Plot epsf to check
-        norm = ImageNormalize(stretch=LogStretch())
+        norm = ImageNormalize(stretch=AsinhStretch())
         plt.figure(figsize=(5, 5))
         plt.imshow(epsf.data, cmap='inferno', origin='lower', norm=norm,
                    interpolation='nearest', vmin=0)

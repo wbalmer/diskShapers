@@ -47,6 +47,28 @@ def calcDistance(x0, y0, x1, y1):
     return np.sqrt((x1 - x0)**2 + (y1-y0)**2)
 
 
+def mediancombine(filelist, norm=False):
+    '''
+    median combine frames, can norm for flats or not
+    '''
+    # gather some information about the images
+    n = len(filelist)
+    first_frame_data = fits.getdata(filelist[0])
+    imsize_y, imsize_x = first_frame_data.shape
+    # construct an empty cube with proper dimensions
+    fits_stack = np.zeros((imsize_y, imsize_x, n))
+    # fill cube with images in filelist
+    for ii in range(0, n):
+        im = fits.getdata(filelist[ii])
+        if norm is True:
+            im /= np.nanmedian(im)
+        fits_stack[:, :, ii] = im
+    # take the median combination of the images along the
+    # correct axis (we made this the 3rd axis of our image cube)
+    med_frame = np.nanmedian(fits_stack, axis=2)
+    return med_frame
+
+
 def linearizeClio2(rawimage):
     '''
     linearizeClio2
@@ -245,7 +267,7 @@ def centroid(data_arr, xcen, ycen, nhalf=5, derivshift=1.):
     return xcenf, ycenf
 
 
-def cross_image(im1, im2, centerx, centery, boxsize=400, **kwargs):
+def cross_image(im1, im2, centerx, centery, **kwargs):
     '''
     cross_image
     ---------------
@@ -268,7 +290,7 @@ def cross_image(im1, im2, centerx, centery, boxsize=400, **kwargs):
     im2                      : (matrix of floats) second input image
     centerx                  : (float) x-center of subregion in reference image
     centery                  : (float) y-center of subregion in reference image
-    boxsize                  : (integer) subregion of image to cross-correlate
+    boxsize (kwarg)          : (integer) subregion of image to cross-correlate
 
     returns
     ---------------
@@ -292,10 +314,12 @@ def cross_image(im1, im2, centerx, centery, boxsize=400, **kwargs):
     im2_gray = im2.astype('float')
 
     # Enable a trimming capability using keyword argument option.
-    im1_gray = im1_gray[centery-boxsize:centery+boxsize,
-                        centerx-boxsize:centerx+boxsize]
-    im2_gray = im2_gray[centery-boxsize:centery+boxsize,
-                        centerx-boxsize:centerx+boxsize]
+    if 'boxsize' in kwargs:
+        boxsize = int(kwargs['boxsize'])
+        im1_gray = im1_gray[centery-boxsize:centery+boxsize,
+                            centerx-boxsize:centerx+boxsize]
+        im2_gray = im2_gray[centery-boxsize:centery+boxsize,
+                            centerx-boxsize:centerx+boxsize]
 
     # Subtract the averages (means) of im1_gray and 2 from their respective arr
     im1_gray -= np.nanmean(im1_gray)
@@ -640,7 +664,7 @@ def clioNodSub(reduced_data, savepath):
                 fits.writeto(new_str, nodsub, hdr, overwrite=True)
 
 
-def crosscube(imcube, cenx, ceny, box=50, returnmed=True, returncube=False):
+def crosscube(imcube, cenx, ceny, box=None, returnmed=True, returncube=False):
     '''
     Conducts crosscorrelation and shifts images in a cube into a common
     position. Returns either a cube of shifted images or a median of the cube
@@ -653,8 +677,12 @@ def crosscube(imcube, cenx, ceny, box=50, returnmed=True, returncube=False):
 
     for index in trange(imcube.shape[0]):
         im = imcube[index]
-        xshifts[index], yshifts[index] = cross_image(im1, im, centerx=cenx,
-                                                     centery=ceny, boxsize=box)
+        if box is not None:
+            xshifts[index], yshifts[index] = cross_image(im1, im, centerx=cenx,
+                                                         centery=ceny, boxsize=box)
+        else:
+            xshifts[index], yshifts[index] = cross_image(im1, im, centerx=cenx,
+                                                         centery=ceny)
         cube[index, :, :] = shift_image(im, xshifts[index], yshifts[index])
 
     # Calculate trim edges of new median stacked images so all stacked images

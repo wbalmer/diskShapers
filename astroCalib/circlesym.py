@@ -69,7 +69,7 @@ def circlesym(datadir, filname, output, method='median', box=451, data=None, sav
     if 'center_only' in kwargs:
         centerrad = kwargs['center_only']
         box_size = int(centerrad)
-        radius_size = int(50)
+        radius_size = box_size//2
         cenx, ceny = int(Datamed.shape[1] /2), int(Datamed.shape[0]/2)
         Data_circsym = Data[:, ceny-radius_size:ceny+radius_size, cenx-radius_size:cenx+radius_size]
 

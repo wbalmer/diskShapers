@@ -126,9 +126,8 @@ def circlesym(datadir, filname, output, method='median', box=451, data=None, sav
         else:
             return ValueError('chose method: individual images or median')
 
-
     else:
-        mask_choice='False'
+        mask_choice = 'False'
         if method == 'individual':
             for j in np.arange(len(Data_circsym)):
                 print('calculating center of circular symmetry for median line image')
@@ -175,6 +174,7 @@ def circlesym(datadir, filname, output, method='median', box=451, data=None, sav
     else:
         return Data_cent
 
+
 def center_circlesym(im, xr, yr, rmax, mask=None):
     '''Finds the center of a star image assuming circular symmetry
     PARAMETERS:
@@ -192,7 +192,6 @@ def center_circlesym(im, xr, yr, rmax, mask=None):
     if mask is None:
         mask = np.zeros_like(im)
 
-
     dimx = im.shape[1]  ### x
     dimy = im.shape[0]  ### y
 
@@ -203,7 +202,6 @@ def center_circlesym(im, xr, yr, rmax, mask=None):
 
     xc = 2. * xr / dimx
     yc = 2. * yr / dimy
-
 
     XX = np.repeat(xx[np.newaxis, :,:], len(xc), axis=0)
     YY = np.repeat(yy[np.newaxis, :,:], len(xc), axis=0)
@@ -224,7 +222,7 @@ def center_circlesym(im, xr, yr, rmax, mask=None):
             rsq = np.sqrt(r2)
             r = 0.5*rsq*dimx
             for k in np.arange(rmax+1):
-                vals = im[(r >=k) & (r < k+1) & (mask == 0)]
+                vals = im[(r >= k) & (r < k+1) & (mask == 0)]
 
 #                if (i == len(yc)/2) &(j == len(yc)/2):
 #                    print(i, k)
@@ -238,15 +236,16 @@ def center_circlesym(im, xr, yr, rmax, mask=None):
 #                    plt.plot(xreal, yreal, marker='*', color='yellow')
 #                    plt.imshow(im2, cmap='magma')
 #                    plt.title('r = ' + str(k))
-##                    plt.axis('off')
+#                    plt.axis('off')
 #                    plt.savefig(f'/Users/sbetti/Desktop/radii/R{k}.png')
 #                    plt.show()
                 if len(vals) > 0:
                     sd = np.nanstd(vals)
-                    if not np.isfinite(sd): sd = 0
+                    if not np.isfinite(sd):
+                        sd = 0
                     med = np.nanmedian(vals)
                     div = (sd/abs(med))**2.
-                    grid[j,i] += div
+                    grid[j, i] += div
 #            if (i == len(yc)/2) &(j == len(xc)/2):
 #                plt.figure()
 #                plt.imshow(grid*-1, cmap='magma')
@@ -254,8 +253,7 @@ def center_circlesym(im, xr, yr, rmax, mask=None):
 #                plt.show()
 
     print()
-    pos = np.where(grid == np.min(grid))
-    print(-1*grid)
+    # pos = np.where(grid == np.min(grid))
     fig, (ax1, ax2, ax3) = plt.subplots(nrows=1, ncols=3)
     ax1.imshow(im, cmap='magma',  origin='lower')
     ax2.imshow(mask, cmap='magma', origin='lower')

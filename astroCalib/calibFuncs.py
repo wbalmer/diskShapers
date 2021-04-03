@@ -282,7 +282,7 @@ def cross_image(im1, im2, centerx, centery, **kwargs):
     Modification History:
     Original implementation by M. Petersen, J. Lowenthal, K. Ward-Duong.
     Updated, provided to author by S. Betti. circa March 2020
-    Reproducted here 10/15/2020 by William Balmer
+    Reproduced here 10/15/2020 by William Balmer
 
     inputs
     ---------------
@@ -363,7 +363,7 @@ def shift_image(image, xshift, yshift):
     Modification History:
     Original implementation by M. Petersen, J. Lowenthal, K. Ward-Duong.
     Updated, provided to author by S. Betti. circa March 2020
-    Reproducted here 10/15/2020 by William Balmer
+    Reproduced here 10/15/2020 by William Balmer
 
     inputs
     ------------
@@ -1103,7 +1103,7 @@ def VisAOLocate(imagepath, thresh, fwhmguess, bright, data=None, stampsize=None,
 
 def NIRCLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
                epsfstamp=None, plot=True, roundness=0.5, crit_sep=15,
-               iterations=1, setfwhm=False, high_pass=False):
+               iterations=1, setfwhm=False, high_pass=False, savestamp=None):
     '''
     NIRCLocate
     ---------
@@ -1233,6 +1233,20 @@ def NIRCLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
 
     result = phot_results
 
+    if savestamp is not None:
+        dir = savestamp
+        targname = head['OBJECT'].replace(' ', '-')
+        if not os.path.exists(dir):
+            os.makedirs(dir)
+        path = dir + '\\' + targname + '_' + date_time_obj.strftime("%Y%m%d") + '_stamp.fits'
+        newhead = head
+        newhead.append(('COMMENT', 'Substamp of original image. Second array is the normalized epsf for the observation'), end=True)
+        stampandepsf = np.zeros((2, stamp.shape[0], stamp.shape[1]))
+        stampandepsf[0] = stamp
+        stampandepsf[1] = epsf.normalized_data
+        fits.writeto(path, stampandepsf, header=newhead, overwrite=True)
+        print('wrote to '+path)
+
     return result
 
 
@@ -1300,7 +1314,6 @@ def findFirst(imagepath, thresh=100, fwhmguess=5, bright=5, roundness=0.3, data=
 
 def nircEPSF(imgpath, epsfsize=None, thresh=100, fwhmguess=5, bright=5,
              plot=True, data=None):
-
 
     if epsfsize is None:
         epsfsize = int(input('input the size of reference psf stamp: '))

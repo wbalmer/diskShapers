@@ -1193,7 +1193,7 @@ def NIRCLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
     except IndexError:  # this happens when the threshold is too high
         newthresh = int(input('found fewer than 2 stars! re-enter threshold? >'))
         newfinder = IRAFStarFinder(newthresh, fwhm, roundlo=-roundness,
-                                roundhi=roundness, sigma_radius=3)
+                                   roundhi=roundness, sigma_radius=3)
         fitter = LevMarLSQFitter()
         phot_obj = IterativelySubtractedPSFPhotometry(finder=newfinder,
                                                       group_maker=daogroup,
@@ -1377,11 +1377,20 @@ def makeEPSF(image, verb=False, plot=True):
 
     if plot is True:
         # Plot epsf to check
-        norm = ImageNormalize(stretch=AsinhStretch())
-        plt.figure(figsize=(5, 5))
-        plt.imshow(epsf.data, cmap='inferno', origin='lower', norm=norm,
-                   interpolation='nearest', vmin=0)
-        plt.colorbar()
+        from mpl_toolkits.axes_grid1 import make_axes_locatable
+        norm = ImageNormalize(stretch=AsinhStretch(a=0.001), vmin=0.1*np.nanmin(epsf.data), vmax=np.nanmax(epsf.data))
+        fig = plt.figure(figsize=(5, 5))
+        ax = plt.subplot(111)
+        im = ax.imshow(epsf.data, cmap='inferno', origin='lower', norm=norm,
+                       interpolation='nearest')
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes("right", size="5%", pad=0.05)
+        cb = fig.colorbar(im, cax=cax)
+        cb.set_label("Counts")
+        plt.suptitle(r'NIRC2 EPSF generated from $\theta^1$ Ori B1')
+        ax.set_xlabel('X (pix)')
+        ax.set_ylabel('Y (pix)')
+        plt.savefig('NIRC2_epsf_fig.png', dpi=200)
         plt.show()
 
     if verb is True:

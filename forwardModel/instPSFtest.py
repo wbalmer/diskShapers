@@ -51,7 +51,7 @@ if __name__ == '__main__':  # This is a very important precaution for Windows
     # date = '16May15'
     prefixes = ['Cont', 'Ha']
     psfplans = [['doGaussian', fwhm], ['doMoffat', fwhm],
-                ['doGhost', fwhm], ['doGaussian', 3]]
+                ['doGhost', fwhm]]
     residuals = []
     filepaths = []
     outputdirs = []
@@ -80,7 +80,10 @@ if __name__ == '__main__':  # This is a very important precaution for Windows
             filepath = filepaths[i]
             outputdir = outputdirs[i]
             prefix = prefixes[i]
-            fm = forwardModel(filepath, outputdir, prefix, KLmode, sep, pa, contrast, an, move, scale, ePSF=PSFpath, FWHM=FWHM, cores=cores, highpass=highpass, numbasis=numbasis)
+            if i == 0:
+                fm = forwardModel(filepath, outputdir, prefix, KLmode, sep, pa, contrast, an, move, scale, ePSF=PSFpath, FWHM=FWHM, cores=cores, highpass=highpass, numbasis=numbasis)
+            else:
+                fm.update_paths(filepath, outputdir, prefix)
             fm.prep_KLIP()
             fm.run_KLIP()
 
@@ -108,8 +111,12 @@ if __name__ == '__main__':  # This is a very important precaution for Windows
         output_prefix = os.path.join(output_prefix, PSFpath)
         output_prefix = output_prefix+'\\'+prefix
 
+
+        plt.savefig(output_prefix+'-FM-psfs-.png', dpi=300)
         img = fits.getdata(output_prefix + "-fmpsf-KLmodes-all.fits")[0]
         n = np.nanmax(img)
+
+        plt.savefig('test.png')
         plt.imshow(domask(img, inn=an[0], outt=an[1]), origin='lower', vmin=-n, vmax=n, cmap='magma')
         plt.xlim(200, 250)
         plt.ylim(200, 250)

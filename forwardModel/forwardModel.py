@@ -5,12 +5,6 @@
 # based on pyklip documentation found here:
 # https://pyklip.readthedocs.io/en/latest/bka.html
 
-# original implementation written by Alex Watson circa 2017
-# expanded by William Balmer
-# last edited 9/18/2020
-# based on pyklip documentation found here:
-# https://pyklip.readthedocs.io/en/latest/bka.html
-
 # import statements
 import os
 import glob
@@ -65,6 +59,11 @@ class forwardModel():
         self.cores = cores
         self.ePSF = ePSF
 
+        if 'outside_psf' in kwargs:
+            self.outside_psf = kwargs['outside_psf']
+        else:
+            self.outside_psf = None
+
         # setup FM guesses
         if 'numbasis' in kwargs:
             self.numbasis = np.array([kwargs['numbasis']])  # KL basis cutoffs you want
@@ -101,7 +100,10 @@ class forwardModel():
             print('saving files to: .\\'+self.outputdir)
         except OSError:
             print('saving files to: .\\'+self.outputdir)
-        self.construct_inst_PSF()  # sets self.psf2 == instrumental psf
+        if self.outside_psf is not None:
+            self.construct_inst_PSF(outside=self.outside_psf)
+        else:
+            self.construct_inst_PSF()  # sets self.psf2 == instrumental psf
         if self.fwhm is None:
             print('instrumental PSF FWHM is: '+str(self.head["0PCTFWHM"]))
         else:
@@ -128,10 +130,10 @@ class forwardModel():
                         numbasis=self.numbasis, annuli=self.annulus_bounds,
                         subsections=self.subsections, padding=self.padding,
                         movement=self.movement, numthreads=self.cores,
-                        highpass=self.hpf)
+                        highpass=self.hpf, corr_smooth=1)
         print('Done constructing forward model! You are ready to MCMC.')
 
-    def construct_inst_PSF(self):
+    def construct_inst_PSF(self, outside=None):
         '''
         Constructs the instrumental psf to use as the forwarded model, either
         from an instrumental ghost or a gaussian. FWHM of gaussian can be
@@ -141,17 +143,24 @@ class forwardModel():
             fwhm = self.head["0PCTFWHM"]
         else:
             fwhm = self.fwhm
-        if self.ePSF == 'doGaussian':
-            gauss = Gaussian(31, fwhm)
-            psf = gauss.g
-        elif self.ePSF == 'doMoffat':
-            ghostdata, moffat = ghost.ghostIsolation(self.filepaths, 380, 220, 10, fwhm, 1)
-            psf = moffat
-        elif self.ePSF == 'doGhost':
-            ghostdata, moffat = ghost.ghostIsolation(self.filepaths, 380, 220, 10, fwhm, 1)
-            psf = ghostdata
+        if outside is not None:
+            psf = outside
         else:
-            psf = fits.getdata(self.ePSF)
+            ghostdata, moffat, gauss, gaufwhm, newfwhm = ghost.ghostIsolation(self.filepaths, 380, 220, 10, fwhm, 1, fwhm=fwhm)
+            self.fwhm = newfwhm
+            fwhm = newfwhm
+            if self.ePSF == 'doGaussian':
+                # gauss = Gaussian(31, fwhm)
+                # psf = gauss.g
+                psf = gaufwhm
+            elif self.ePSF == 'doGaussFit':
+                psf = gauss
+            elif self.ePSF == 'doMoffat':
+                psf = moffat
+            elif self.ePSF == 'doGhost':
+                psf = ghostdata
+            else:
+                psf = fits.getdata(self.ePSF)
         # shape instrumental psf how pyklipFM wants
         psf2 = np.zeros((1, psf.shape[0], psf.shape[1]))
         psf2[0] = psf

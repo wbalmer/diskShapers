@@ -51,7 +51,7 @@ class diskDuster():
                                          calibrate_flux=False,
                                          mode="ADI", highpass=self.highpass,
                                          save_aligned=False,
-                                         time_collapse='median')
+                                         time_collapse='median', lite=True)
 
         self.resultdir = self.outputdir+'\\'+self.pfx+'-KLmodes-all.fits'
         print('KLIP result is saved to: '+self.resultdir)

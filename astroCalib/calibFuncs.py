@@ -1103,7 +1103,8 @@ def VisAOLocate(imagepath, thresh, fwhmguess, bright, data=None, stampsize=None,
 
 def NIRCLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
                epsfstamp=None, plot=True, roundness=0.5, crit_sep=15,
-               iterations=1, setfwhm=False, high_pass=False, savestamp=None):
+               iterations=1, setfwhm=False, high_pass=False, savestamp=None,
+               rotkwd=False):
     '''
     NIRCLocate
     ---------
@@ -1128,6 +1129,8 @@ def NIRCLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
     crit_sep            : (optional, float, default=15)
     iterations          : (optional, int, default=1) iterations for IterativelySubtractedPSFPhotometry
     setfwhm             : (optional, bool, default=False) use fwhmguess as fwhm
+    setfwhm             : (optional, str, default=None) path to save stamp as fits
+    rotkwd              : (optional, bool, default=False) rotate following NIRC2 rotation schema
 
     outputs
     ------------
@@ -1140,18 +1143,31 @@ def NIRCLocate(imagepath, thresh, fwhmguess, bright, stampsize=None,
     # read in img header to get pixel scale
     head = fits.getheader(imagepath)
     date = head['DATE-OBS']
+    print('rotator mode was set to: '+head['ROTMODE'])
+    if head['ROTMODE'] == 'vertical angle':
+        parang = head['PARANG']
+        rotposn = head['ROTPOSN']
+        insangl = head['INSTANGL']
+        na_offset = parang+rotposn-insangl
+    elif rotkwd is True:
+        rotposn = head['ROTPOSN']
+        insangl = head['INSTANGL']
+        na_offset = rotposn-insangl
+    else:
+        na_offset = 0
     date_time_obj = datetime.datetime.strptime(date, '%Y-%m-%d')
     pixturnover = datetime.datetime.strptime('2015-5-13', '%Y-%m-%d')
     if date_time_obj.date() > pixturnover.date():
         pixel_scale = 0.009971  # arcsec
         pix_err = 0.005  # milliarcsec
-        na_offset = -0.262  # degree
+        na_offset -= 0.262  # degree
         na_err = 0.020  # degree
     else:
         pixel_scale = 0.009952
         pix_err = 0.002
-        na_offset = -0.252
+        na_offset -= 0.252
         na_err = 0.009
+    print('NA offset applied will be: '+str(na_offset))
 
     epsf = nircEPSF(imagepath, epsfsize=epsfstamp, data=data)
 
@@ -1378,7 +1394,7 @@ def makeEPSF(image, verb=False, plot=True):
     if plot is True:
         # Plot epsf to check
         from mpl_toolkits.axes_grid1 import make_axes_locatable
-        norm = ImageNormalize(stretch=AsinhStretch(a=0.001), vmin=0.1*np.nanmin(epsf.data), vmax=np.nanmax(epsf.data))
+        norm = ImageNormalize(epsf.data, stretch=AsinhStretch())
         fig = plt.figure(figsize=(5, 5))
         ax = plt.subplot(111)
         im = ax.imshow(epsf.data, cmap='inferno', origin='lower', norm=norm,
@@ -1419,8 +1435,8 @@ def calcBinDist(phot_results, scale='y'):
 
         pixel_scale = phot_results['pixscale'][0]
         pixel_err = phot_results['pixerr'][0]
-        # na_offset = phot_results['PAoff'][0]  # I don't think this is necessary
-        na_err = phot_results['PAofferr'][0]  # bc Rob's data is already rotated
+        na_offset = phot_results['PAoff'][0]
+        na_err = phot_results['PAofferr'][0]
 
     seps = []
     errs = []
@@ -1435,7 +1451,7 @@ def calcBinDist(phot_results, scale='y'):
 
         if scale == 'y':
             sep = (s*pixel_scale*u.arcsec).to(u.mas)
-            PA = phi  # +na_offset
+            PA = phi+na_offset
         else:
             sep = s
             PA = phi

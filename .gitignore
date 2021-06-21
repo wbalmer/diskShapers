@@ -1,4 +1,5 @@
 # ignore large files, unnecessary folders
+*.hdf5
 *.fits
 *.fit
 *fit.gz

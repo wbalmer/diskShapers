@@ -54,8 +54,11 @@ def makeSquare(xc,yc,data,filename="test_square.fits"):
     return maskedArray, foundX, foundY
 
 
-def moffat(xcen,ycen,amp,wid,power):
-    return models.Moffat2D(amplitude=amp, x_0=xcen, y_0=ycen, gamma=wid, alpha=power)
+def moffat(xcen,ycen,amp,wid,power, fixed=False):
+    if fixed:
+        return models.Moffat2D(amplitude=amp, x_0=xcen, y_0=ycen, gamma=wid, alpha=power, fixed={"gamma":True, "alpha":True})
+    else:
+        return models.Moffat2D(amplitude=amp, x_0=xcen, y_0=ycen, gamma=wid, alpha=power)
 
 
 def tie_xy(model):
@@ -82,8 +85,13 @@ def makeMoffatGhost(array,xcen,ycen,amp,wid,power,fwhm):
     mofFit = lfit(mofmodel, x, y, z)
     gauFit = lfit(gaumodel, x, y, z)
 
-    print('CUT FWHM IS '+str(mofFit.fwhm))
-    fwhm = round(mofFit.fwhm, 3)
+    fwhm = round(mofFit.fwhm, 3)/1.07
+    print('CUT MOF FWHM IS '+str(fwhm))
+    print('CUT GAU FWHM IS '+str(gauFit.x_fwhm),str(gauFit.y_fwhm))
+    core = (fwhm)/(2*np.sqrt(2**(1/mofFit.alpha)-1))
+    smof = moffat(ycen, xcen, mofFit.amplitude, core, mofFit.alpha, fixed=True)
+    smof = lfit(smof, x, y, z)
+    print('FIXED MOFFAT FWHM IS '+str(smof.fwhm))
     fig = plt.figure(figsize=(9, 6))
     fig.subplots_adjust(left=0.02, bottom=0.06, right=0.95, top=0.94, wspace=0.5)
     ax1 = plt.subplot(2, 4, 1)
@@ -94,7 +102,7 @@ def makeMoffatGhost(array,xcen,ycen,amp,wid,power,fwhm):
     cb1 = fig.colorbar(im1, cax=cax1)
 
     ax2 = plt.subplot(2, 4, 2)
-    im2 = ax2.imshow(mofFit(x, y), origin='lower', interpolation='nearest', cmap='magma')
+    im2 = ax2.imshow(smof(x, y), origin='lower', interpolation='nearest', cmap='magma')
     ax2.set(yticklabels=[])
     ax2.set_title("Moffat")
     divider = make_axes_locatable(ax2)
@@ -123,7 +131,7 @@ def makeMoffatGhost(array,xcen,ycen,amp,wid,power,fwhm):
 
     ax4 = plt.subplot(2, 4, 6)
     ax4.set_title("Moffat Residual")
-    im4 = ax4.imshow(z - mofFit(x, y), origin='lower', interpolation='nearest', cmap='magma')
+    im4 = ax4.imshow(z - smof(x, y), origin='lower', interpolation='nearest', cmap='magma')
     divider = make_axes_locatable(ax4)
     cax4 = divider.append_axes("right", size="5%", pad=0.05)
     cb4 = fig.colorbar(im4, cax=cax4)
@@ -152,7 +160,7 @@ def makeMoffatGhost(array,xcen,ycen,amp,wid,power,fwhm):
 
     print("x center is " + str(mofFit.x_0))
     print("y center is " + str(mofFit.y_0))
-    return (mofFit, mofFit.x_0, mofFit.y_0, gauFit, gaumodelFWHM, fwhm)
+    return (mofFit, mofFit.x_0, mofFit.y_0, gauFit, gaumodelFWHM, fwhm, smof)
 
 
 def normalizeSquare(array):
@@ -185,11 +193,12 @@ def ghostIsolation(filename, gx, gy, amp, wid, power, fwhm=None):
     foundXSmall = foundX+15-gx
     foundYSmall = foundY+15-gy
 
-    model, xCenter, yCenter, modelgau, modelgauFWHM, newfwhm = makeMoffatGhost(maskedArray,foundXSmall,foundYSmall,amp,wid,power, fwhm)
+    model, xCenter, yCenter, modelgau, modelgauFWHM, newfwhm, smof = makeMoffatGhost(maskedArray,foundXSmall,foundYSmall,amp,wid,power, fwhm)
 
     y, x = np.mgrid[:31, :31]
     model = model(x, y)
     modelgau = modelgau(x, y)
+    smof2 = smof(x, y)
     print(xCenter, yCenter)
 
     shift(xCenter,yCenter, original)
@@ -200,7 +209,7 @@ def ghostIsolation(filename, gx, gy, amp, wid, power, fwhm=None):
     maskedArray2, a, b = makeSquare(foundX,foundY,data,"ghost.fits")
     #normalizeSquare(maskedArray2)
     #fits.writeto("test_final.fits", maskedArray2, overwrite=True)
-    return maskedArray2, model, modelgau, modelgauFWHM, newfwhm
+    return maskedArray2, model, modelgau, modelgauFWHM, newfwhm, smof2
     '''
     with open("moffat.txt","w") as text_file:
         text_file.write(str(amp) + " " + str(ampErr) + " " + str(wid) + " " + str(widErr) + " " + str(area) + " " + str(areaErr))

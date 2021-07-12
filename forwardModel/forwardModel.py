@@ -146,17 +146,17 @@ class forwardModel():
         if outside is not None:
             psf = outside
         else:
-            ghostdata, moffat, gauss, gaufwhm, newfwhm = ghost.ghostIsolation(self.filepaths, 380, 220, 10, fwhm, 1, fwhm=fwhm)
+            ghostdata, moffat, gauss, gaufwhm, newfwhm, smallermof = ghost.ghostIsolation(self.filepaths, 380, 220, 10, fwhm, 1, fwhm=fwhm)
             self.fwhm = newfwhm
             fwhm = newfwhm
             if self.ePSF == 'doGaussian':
-                # gauss = Gaussian(31, fwhm)
-                # psf = gauss.g
-                psf = gaufwhm
+                gauss = Gaussian(31, newfwhm)
+                psf = gauss.g
+                # psf = gaufwhm
             elif self.ePSF == 'doGaussFit':
                 psf = gauss
             elif self.ePSF == 'doMoffat':
-                psf = moffat
+                psf = smallermof #moffat
             elif self.ePSF == 'doGhost':
                 psf = ghostdata
             else:

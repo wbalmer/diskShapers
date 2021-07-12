@@ -1,5 +1,7 @@
 # ignore large files, unnecessary folders
 *.hdf5
+astroCalib\b2b3_post_updateErr2.hdf5
+astroCalib\my_posterior.hdf5
 *.fits
 *.fit
 *fit.gz

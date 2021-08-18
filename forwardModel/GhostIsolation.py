@@ -3,11 +3,12 @@ from astropy.io import fits
 from astropy.modeling import models, fitting
 import numpy as np
 import matplotlib.pyplot as plt
-import image_registration as ir
+from image_registration.fft_tools.shift import shift2d
 
 
 def readInFilelist(path):
     imlist = glob.glob(path)
+    print(path)
     firstim = fits.getdata(imlist[0])
     original = np.zeros((len(imlist), firstim.shape[0], firstim.shape[1]))
     for i in range(0, len(imlist)):
@@ -85,7 +86,7 @@ def makeMoffatGhost(array,xcen,ycen,amp,wid,power,fwhm):
     mofFit = lfit(mofmodel, x, y, z)
     gauFit = lfit(gaumodel, x, y, z)
 
-    fwhm = round(mofFit.fwhm, 3)/1.07
+    fwhm = round(mofFit.fwhm/1.07, 3)
     print('CUT MOF FWHM IS '+str(fwhm))
     print('CUT GAU FWHM IS '+str(gauFit.x_fwhm),str(gauFit.y_fwhm))
     core = (fwhm)/(2*np.sqrt(2**(1/mofFit.alpha)-1))
@@ -178,7 +179,7 @@ def shift(x,y,original):
     size = original.shape[0]
     shiftX, shiftY = x-15, y-15
     for z in range(size):
-        shifted_image = ir.fft_tools.shift2d(original[z],-shiftX,-shiftY)
+        shifted_image = shift2d(original[z],-shiftX,-shiftY)
         original[z] = shifted_image
         if(z%100 == 0):
             print("shift number " + str(z))

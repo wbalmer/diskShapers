@@ -24,7 +24,7 @@ class diskDuster():
         KLIP reduction via "run_KLIP" function
         Initialized: William B. 10/21/2020
         '''
-        self.filelist = glob.glob(filepath+'\\*.fits')
+        self.filelist = glob.glob(filepath+'/*.fits')
         self.head = fits.getheader(self.filelist[0])
         self.highpass = highpass
         self.dataset = MagAO.MagAOData(self.filelist, highpass=self.highpass)
@@ -53,7 +53,7 @@ class diskDuster():
                                          save_aligned=False,
                                          time_collapse='median', lite=True)
 
-        self.resultdir = self.outputdir+'\\'+self.pfx+'-KLmodes-all.fits'
+        self.resultdir = self.outputdir+'/'+self.pfx+'-KLmodes-all.fits'
         print('KLIP result is saved to: '+self.resultdir)
         return
 

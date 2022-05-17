@@ -165,3 +165,6 @@ class forwardModel():
         psf2 = np.zeros((1, psf.shape[0], psf.shape[1]))
         psf2[0] = psf
         self.psf2 = psf2
+        from pyklip.klip import high_pass_filter
+        filtersize = psf2.shape[0]/self.hpf
+        self.psf2 = high_pass_filter(self.psf2, filtersize)

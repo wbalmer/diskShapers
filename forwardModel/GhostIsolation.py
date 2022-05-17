@@ -131,7 +131,7 @@ def makeMoffatGhost(array,xcen,ycen,amp,wid,power,fwhm):
     ax3point5.set_label("Counts")
 
     ax4 = plt.subplot(2, 4, 6)
-    ax4.set_title("Moffat Residual")
+    ax4.set_title("Residual")
     im4 = ax4.imshow(z - smof(x, y), origin='lower', interpolation='nearest', cmap='magma')
     divider = make_axes_locatable(ax4)
     cax4 = divider.append_axes("right", size="5%", pad=0.05)
@@ -140,7 +140,7 @@ def makeMoffatGhost(array,xcen,ycen,amp,wid,power,fwhm):
 
 
     ax5 = plt.subplot(2, 4, 7)
-    ax5.set_title("Gaussian Fit Residual")
+    ax5.set_title("Residual")
     im5 = ax5.imshow(z - gauFit(x, y), origin='lower', interpolation='nearest', cmap='magma')
     divider = make_axes_locatable(ax5)
     cax5 = divider.append_axes("right", size="5%", pad=0.05)
@@ -149,7 +149,7 @@ def makeMoffatGhost(array,xcen,ycen,amp,wid,power,fwhm):
 
 
     ax6 = plt.subplot(2, 4, 8)
-    ax6.set_title('Gaussian FWHM'+str(fwhm)+" Residual")
+    ax6.set_title("Residual")
     im6 = ax6.imshow(z - gaumodelFWHM, origin='lower', interpolation='nearest', cmap='magma')
     divider = make_axes_locatable(ax6)
     cax6 = divider.append_axes("right", size="5%", pad=0.05)

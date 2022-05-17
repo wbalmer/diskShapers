@@ -22,3 +22,5 @@ trapBEA
 *summary.txt
 *.DS_Store
 *ultranest*
+*.pdf*
+*.tgz*
